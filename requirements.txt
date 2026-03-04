@@ -9,7 +9,7 @@ trl
 unsloth
 huggingface_hub
 tqdm
-einpops
+einops
 Pillow
 sentencepiece
 protobuf
