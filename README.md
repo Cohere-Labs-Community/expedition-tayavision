@@ -4,9 +4,26 @@ Part of Tiny Aya Expedition - Tiny Aya Vision
 
 ## Installation
 
-Use uv to get the best version of library
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# fast
-uv pip install -r requirements.txt
+uv sync
+```
+
+For development (includes pytest, ruff):
+
+```bash
+uv sync --group dev
+```
+
+### PyTorch CUDA/CPU override
+
+The default configuration pulls PyTorch wheels for CUDA 12.4. To use a different CUDA version or CPU-only:
+
+```bash
+# CPU-only
+UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu uv sync
+
+# CUDA 12.1
+UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu121 uv sync
 ```
