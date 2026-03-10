@@ -13,6 +13,7 @@ from models.tiny_aya_vision import TinyAyaVisionForConditionalGeneration
 from pipeline.data import AlignmentDataset, collate_fn
 from src.processing import TinyAyaVisionProcessor
 
+torch.set_float32_matmul_precision("high")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
