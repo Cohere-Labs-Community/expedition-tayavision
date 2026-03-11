@@ -45,6 +45,7 @@ def train(
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
     training_config: AlignmentConfig,
     checkpoint_dir: Path,
+    compute_dtype: torch.dtype,
     step_offset: int = 0,
 ):
     model.train()
@@ -59,7 +60,7 @@ def train(
                 batch["labels"].to(device),
             )
 
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with torch.autocast("cuda", dtype=compute_dtype):
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -132,8 +133,9 @@ def main(
     for param in model.language_model.parameters():
         param.requires_grad = False
 
-    model.vision_encoder.to(dtype=torch.bfloat16)
-    model.language_model.to(dtype=torch.bfloat16)
+    compute_dtype = getattr(torch, training_config.torch_dtype)
+    model.vision_encoder.to(dtype=compute_dtype)
+    model.language_model.to(dtype=compute_dtype)
 
     model = torch.compile(model)
 
@@ -209,6 +211,7 @@ def main(
         lr_scheduler=lr_scheduler,
         training_config=training_config,
         checkpoint_dir=checkpoint_dir,
+        compute_dtype=compute_dtype,
         step_offset=resume_step,
     )
 
