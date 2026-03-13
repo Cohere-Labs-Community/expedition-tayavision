@@ -13,11 +13,19 @@ class TestVLMAssembly:
 
     These tests require GPU and download both models (~7.5GB in bf16).
     Run with: pytest tests/test_vlm_assembly.py -v
+
+    Parametrized over both LLM backbones:
+      - "base"   → CohereLabs/tiny-aya-base   (pretrained)
+      - "global" → CohereLabs/tiny-aya-global (instruction-tuned)
     """
 
-    @pytest.fixture(scope="class")
-    def model_and_processor(self):
-        config = TinyAyaVisionConfig()
+    @pytest.fixture(scope="class", params=["base", "global"])
+    def model_and_processor(self, request):
+        config = (
+            TinyAyaVisionConfig.for_global()
+            if request.param == "global"
+            else TinyAyaVisionConfig.for_base()
+        )
         model = TinyAyaVisionForConditionalGeneration(config)
         processor = TinyAyaVisionProcessor(config)
         model.setup_tokenizer(processor.tokenizer)

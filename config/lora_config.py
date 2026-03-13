@@ -1,16 +1,17 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from peft import LoraConfig, TaskType
 
-# Tiny Aya Base has 36 transformer layers (indices 0–35).
-# "Mid-to-top" targets the upper half: layers 18–35.
-_NUM_LLM_LAYERS = 36
-_FIRST_MID_LAYER = _NUM_LLM_LAYERS // 2  # 18
+if TYPE_CHECKING:
+    from config.model_config import TinyAyaVisionConfig
 
 
 @dataclass
 class LoraAdapterConfig:
-    """LoRA adapter configuration for the Tiny Aya Base (Cohere2) backbone.
+    """LoRA adapter configuration for the Tiny Aya (Cohere2) backbone.
 
     LoRA injects trainable rank-decomposition matrices A (down) and B (up) into
     frozen linear layers. Only the injected adapter weights are updated during
@@ -47,17 +48,32 @@ class LoraAdapterConfig:
         ]
     )
 
-    # Layer indices to inject LoRA into (mid-to-top: layers 18–35 of 36 total).
+    # Layer indices to inject LoRA into (mid-to-top: upper half of total layers).
     # Lower layers encode general language/multilingual knowledge that we want
     # to preserve; upper layers are more task-specific and benefit from adaptation.
+    # Default targets layers 18–35 of 36 total (Cohere2 with 36 layers).
     layers_to_transform: list[int] = field(
-        default_factory=lambda: list(range(_FIRST_MID_LAYER, _NUM_LLM_LAYERS))
+        default_factory=lambda: list(range(18, 36))
     )
 
     # Differential LR multipliers for A and B matrices.
     # Set both to 1.0 to use a uniform LR for all adapter parameters.
     lora_a_lr_multiplier: float = 1.0
     lora_b_lr_multiplier: float = 1.0
+
+    @classmethod
+    def from_vlm_config(
+        cls, vlm_config: TinyAyaVisionConfig, **kwargs
+    ) -> LoraAdapterConfig:
+        """Build a LoraAdapterConfig targeting the upper half of the LLM's layers.
+
+        Derives layer indices from vlm_config.num_llm_layers so the config
+        stays correct regardless of which Tiny Aya variant is used.
+        """
+        num_layers = vlm_config.num_llm_layers
+        first_mid = num_layers // 2
+        layers = list(range(first_mid, num_layers))
+        return cls(layers_to_transform=layers, **kwargs)
 
     def to_peft_config(self) -> LoraConfig:
         """Return a PEFT LoraConfig ready for use with get_peft_model()."""

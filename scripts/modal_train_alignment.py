@@ -35,28 +35,36 @@ image = (
 )
 
 
-@app.function(
+@app.cls(
     image=image,
     gpu="A10G",
     volumes={"/data": volume, "/models": models_volume},
     secrets=[modal.Secret.from_name("huggingface"), modal.Secret.from_name("wandb")],
     timeout=3600 * 24,
 )
-def train(resume_run_id: str | None = None):
-    import sys
-    sys.path.insert(0, "/root/project")
+class Trainer:
+    @modal.method()
+    def train(self, resume_run_id: str | None = None, config_json: str | None = None):
+        import json
+        import sys
+        sys.path.insert(0, "/root/project")
 
-    from config.training_config import AlignmentConfig
-    from config.model_config import TinyAyaVisionConfig
-    from pipeline.train_alignment import main
+        from config.training_config import AlignmentConfig
+        from config.model_config import TinyAyaVisionConfig
+        from pipeline.train_alignment import main
 
-    main(
-        training_config=AlignmentConfig(),
-        model_config=TinyAyaVisionConfig(),
-        resume_run_id=resume_run_id,
-    )
+        overrides = json.loads(config_json) if config_json else {}
+        main(
+            training_config=AlignmentConfig(**overrides),
+            model_config=TinyAyaVisionConfig(),
+            resume_run_id=resume_run_id,
+        )
 
 
 @app.local_entrypoint()
-def run(resume_run_id: str = None):
-    train.remote(resume_run_id=resume_run_id)
+def run(resume_run_id: str = None, config: str = None, gpu: str = "A100"):
+    config_json = None
+    if config:
+        with open(config) as f:
+            config_json = f.read()
+    Trainer.with_options(gpu=gpu)().train.remote(resume_run_id=resume_run_id, config_json=config_json)
