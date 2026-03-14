@@ -12,7 +12,7 @@ models_volume = modal.Volume.from_name("tayavision-models", create_if_missing=Tr
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install(
+    .uv_pip_install(
         "torch",
         "torchvision",
         "transformers",
