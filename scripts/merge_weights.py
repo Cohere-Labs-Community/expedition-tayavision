@@ -243,10 +243,54 @@ def _load_original_llm(model_name: str, device: str, dtype: torch.dtype) -> Dict
 
 
 def _load_finetuned_vlm(checkpoint_path: str, device: str) -> Dict[str, torch.Tensor]:
-    """Load a fine-tuned VLM state dict from a ``.pt`` checkpoint or directory."""
+    """Load a fine-tuned VLM state dict from a HuggingFace Hub ID, a local HF
+    model directory, or a raw ``.pt`` / ``.safetensors`` checkpoint file.
+
+    The returned state dict always contains the **full** VLM — language model
+    backbone (``language_model.*``), multi-modal projector / connector
+    (``multi_modal_projector.*``), and vision encoder (``vision_encoder.*``) —
+    because the connector is trained during IFT and must be preserved.
+
+    Loading priority
+    ----------------
+    1. If ``checkpoint_path`` looks like a HuggingFace Hub ID (no path separator
+       and not an existing directory/file), or is an existing directory that
+       contains ``config.json`` (i.e. a saved HF model dir), load via
+       ``AutoModel.from_pretrained``.
+    2. If ``checkpoint_path`` is a directory containing raw weight files
+       (``.pt`` / ``.pth`` / ``.safetensors``), load the first candidate.
+    3. If ``checkpoint_path`` points directly to a single weight file, load it.
+    """
+    from transformers import AutoModel  # local import — only needed here
+
     p = Path(checkpoint_path)
 
-    # Try directory: look for a state dict file
+    # ------------------------------------------------------------------ #
+    # Case 1: HF Hub ID or HF-format local directory (has config.json)   #
+    # ------------------------------------------------------------------ #
+    is_hf_dir = p.is_dir() and (p / "config.json").exists()
+    is_hub_id = not p.exists()  # doesn't exist locally → must be a Hub ID
+
+    if is_hf_dir or is_hub_id:
+        log.info(
+            "Loading fine-tuned VLM via AutoModel.from_pretrained('%s') …",
+            checkpoint_path,
+        )
+        model = AutoModel.from_pretrained(
+            checkpoint_path,
+            torch_dtype=torch.float32,
+            device_map=device,
+            trust_remote_code=True,  # needed for custom architectures
+        )
+        state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return state
+
+    # ------------------------------------------------------------------ #
+    # Case 2: directory with raw weight files                             #
+    # ------------------------------------------------------------------ #
     if p.is_dir():
         candidates = (
             list(p.glob("*.pt"))
@@ -257,11 +301,15 @@ def _load_finetuned_vlm(checkpoint_path: str, device: str) -> Dict[str, torch.Te
             raise FileNotFoundError(
                 f"No .pt / .pth / .safetensors checkpoint file found in "
                 f"'{checkpoint_path}'. Pass the path to a checkpoint file "
-                "directly, or ensure the directory contains one."
+                "directly, ensure the directory contains one, or use a "
+                "HuggingFace Hub ID."
             )
         checkpoint_path = str(candidates[0])
         log.info("Found checkpoint file: %s", checkpoint_path)
 
+    # ------------------------------------------------------------------ #
+    # Case 3: single weight file                                          #
+    # ------------------------------------------------------------------ #
     log.info("Loading fine-tuned VLM state dict from '%s' …", checkpoint_path)
 
     if checkpoint_path.endswith(".safetensors"):
@@ -270,7 +318,7 @@ def _load_finetuned_vlm(checkpoint_path: str, device: str) -> Dict[str, torch.Te
     else:
         state = torch.load(checkpoint_path, map_location=device, weights_only=True)
 
-    # unwrap common wrappers
+    # Unwrap common training-framework wrappers
     if isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
     if isinstance(state, dict) and "model" in state:
@@ -286,42 +334,79 @@ def _save_outputs(
     save_hf: bool,
     original_llm_name: str,
 ) -> None:
-    """Save merged state dict (and optionally a HuggingFace model dir)."""
+    """Save merged state dict (and optionally a HuggingFace model dir).
+
+    The raw ``merged_state.pt`` always contains the **full** VLM state dict
+    (LLM backbone + connector + vision encoder) so nothing trained during IFT
+    is discarded.
+
+    When ``save_hf=True`` two artefacts are written inside ``hf_model/``:
+    * The merged LLM backbone saved via ``AutoModelForCausalLM.save_pretrained``.
+    * ``connector_state.pt`` — the multi-modal projector weights (with the
+      ``multi_modal_projector.`` prefix intact) so they can be reloaded
+      directly into a ``TinyAyaVisionForConditionalGeneration`` instance.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Always save a raw state dict
-    pt_path = output_dir / "merged_state.pt"
     # Cast to target dtype before saving
     cast_state = {k: v.to(dtype) for k, v in merged_state.items()}
+
+    # Always save the full VLM state dict (LLM + connector + vision encoder)
+    pt_path = output_dir / "merged_state.pt"
     torch.save(cast_state, pt_path)
-    log.info("Saved merged state dict → %s", pt_path)
+    log.info("Saved full merged VLM state dict → %s", pt_path)
 
     if save_hf:
         hf_dir = output_dir / "hf_model"
         hf_dir.mkdir(parents=True, exist_ok=True)
 
-        # Extract just LLM weights (stripped of prefix) to load into base model
+        # ---- 1. LLM backbone ------------------------------------------------
         llm_state = {
             key[len(LLM_PREFIX):]: val
             for key, val in cast_state.items()
             if key.startswith(LLM_PREFIX)
         }
 
-        log.info("Building HF model at '%s' …", hf_dir)
+        log.info("Building HF LLM model at '%s' …", hf_dir)
         model = AutoModelForCausalLM.from_pretrained(
             original_llm_name,
             torch_dtype=dtype,
         )
         missing, unexpected = model.load_state_dict(llm_state, strict=False)
         if missing:
-            log.warning("HF save: %d missing keys (expected if vocab was resized): %s …",
-                        len(missing), missing[:3])
+            log.warning(
+                "HF save: %d missing LLM keys (expected if vocab was resized): %s …",
+                len(missing), missing[:3],
+            )
         if unexpected:
-            log.warning("HF save: %d unexpected keys: %s …", len(unexpected), unexpected[:3])
-
+            log.warning(
+                "HF save: %d unexpected LLM keys: %s …", len(unexpected), unexpected[:3]
+            )
         model.save_pretrained(str(hf_dir))
-        log.info("Saved HF model → %s", hf_dir)
+        log.info("Saved HF LLM backbone → %s", hf_dir)
         del model
+
+        # ---- 2. Connector (multi-modal projector) ----------------------------
+        # The connector is trained during IFT so we must persist it alongside
+        # the LLM backbone.  Keys keep their original ``multi_modal_projector.*``
+        # prefix so they can be loaded with a simple load_state_dict call.
+        connector_state = {
+            key: val
+            for key, val in cast_state.items()
+            if key.startswith(PROJECTOR_PREFIX)
+        }
+        if connector_state:
+            connector_path = hf_dir / "connector_state.pt"
+            torch.save(connector_state, connector_path)
+            log.info(
+                "Saved connector weights (%d tensors) → %s",
+                len(connector_state), connector_path,
+            )
+        else:
+            log.warning(
+                "No '%s*' keys found in merged state — connector not saved.",
+                PROJECTOR_PREFIX,
+            )
 
 
 # ---------------------------------------------------------------------------
