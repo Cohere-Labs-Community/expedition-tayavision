@@ -59,3 +59,12 @@ def cvqa_blind_doc_to_choice(doc):
 
 def cvqa_blind_doc_to_target(doc):
     return doc["Label"]
+
+def cvqa_blind_global_doc_to_text(doc):
+    """Format for Cohere/Aya chat template (SFT models)."""
+    question = doc["Question"]
+    return (
+        "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>"
+        f"Question: {question}\nAnswer:"
+        "<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+    )

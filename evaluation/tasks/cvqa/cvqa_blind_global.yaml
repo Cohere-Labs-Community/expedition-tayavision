@@ -1,0 +1,3 @@
+include: cvqa_blind.yaml
+task: cvqa_blind_global
+doc_to_text: !function utils.cvqa_blind_global_doc_to_text
