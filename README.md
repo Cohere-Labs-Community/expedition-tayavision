@@ -30,7 +30,7 @@ UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu121 uv sync
 
 ## Get Started
 
-Download the dataset
+Download the dataset (~13 GB)
 
 ```bash
 python scripts/download_llava_pretrain.py --output-dir data/llava-pretrain
