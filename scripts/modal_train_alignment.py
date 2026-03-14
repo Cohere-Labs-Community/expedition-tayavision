@@ -12,7 +12,7 @@ models_volume = modal.Volume.from_name("tayavision-models", create_if_missing=Tr
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install(
+    .uv_pip_install(
         "torch",
         "torchvision",
         "transformers",
@@ -27,6 +27,8 @@ image = (
         "tqdm",
         "einops",
         "wandb",
+        "hydra-core",
+        "omegaconf",
     )
     .add_local_dir("config", remote_path="/root/project/config")
     .add_local_dir("src", remote_path="/root/project/src")
@@ -42,21 +44,21 @@ image = (
     secrets=[modal.Secret.from_name("huggingface"), modal.Secret.from_name("wandb")],
     timeout=3600 * 24,
 )
-def train(resume_run_id: str | None = None):
+def train(overrides: list[str]):
     import sys
     sys.path.insert(0, "/root/project")
 
-    from config.training_config import AlignmentConfig
-    from config.model_config import TinyAyaVisionConfig
-    from pipeline.train_alignment import main
+    # Pass overrides directly to the hydra CLI
+    sys.argv = ["train_alignment.py"] + overrides
 
-    main(
-        training_config=AlignmentConfig(),
-        model_config=TinyAyaVisionConfig(),
-        resume_run_id=resume_run_id,
-    )
+    from pipeline.train_alignment import main
+    main()
 
 
 @app.local_entrypoint()
-def run(resume_run_id: str = None):
-    train.remote(resume_run_id=resume_run_id)
+def run(*overrides: str):
+    """
+    Run the alignment training. Any extra arguments will be passed to Hydra as overrides.
+    Example: modal run scripts/modal_train_alignment.py vision=siglip training.batch_size=16 resume=YOUR_UUID
+    """
+    train.remote(list(overrides))

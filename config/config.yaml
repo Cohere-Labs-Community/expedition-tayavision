@@ -1,0 +1,12 @@
+defaults:
+  - _self_
+  - vision: moonvit
+  - training: alignment
+
+llm: base
+resume: null
+
+wandb:
+  project: tayavision
+  entity: null
+  mode: online
