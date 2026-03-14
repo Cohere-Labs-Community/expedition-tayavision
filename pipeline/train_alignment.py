@@ -6,6 +6,10 @@ from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 
+# Important additions
+import hydra
+from omegaconf import DictConfig, OmegaConf
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
@@ -97,11 +101,27 @@ def train(
     print("Training complete")
 
 
-def main(
-    training_config: AlignmentConfig,
-    model_config: TinyAyaVisionConfig,
-    resume_run_id: str | None = None,
-):
+@hydra.main(version_base="1.3", config_path="../config", config_name="config")
+def main(cfg: DictConfig):
+    # 1. Translate omegaconf nodes back to plain dictionaries
+    training_dict = OmegaConf.to_container(cfg.training, resolve=True)
+    
+    # 2. Re-instantiate your configurations to maintain types downwards
+    training_config = AlignmentConfig(**training_dict)
+    
+    # Instantiate Model Config 
+    model_config = TinyAyaVisionConfig.for_encoder(
+        cfg.vision.vision_encoder_type, 
+        llm=cfg.llm
+    )
+    
+    # Optional logic: If vision params scale further inside the yaml than presets:
+    # model_dict = OmegaConf.to_container(cfg.vision, resolve=True)
+    # model_config = TinyAyaVisionConfig(**model_dict, llm=cfg.llm)
+
+    # Allow CLI-based resuming (e.g. `python train.py resume=xyz123`)
+    resume_run_id = cfg.get("resume", None)
+
     if resume_run_id:
         run_id = resume_run_id
     else:
@@ -114,6 +134,7 @@ def main(
 
     config_path = checkpoint_dir / "config.json"
     if not config_path.exists():
+        import json
         with open(config_path, "w") as f:
             json.dump({
                 "training_config": asdict(training_config),
@@ -121,7 +142,9 @@ def main(
             }, f, indent=2)
 
     wandb.init(
-        project="tayavision",
+        project=cfg.wandb.project,
+        entity=cfg.wandb.entity,
+        mode=cfg.wandb.mode,
         name=run_id,
         id=run_id.replace("-", ""),
         resume="allow",
@@ -229,48 +252,4 @@ def main(
     wandb.finish()
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Train Tiny Aya Vision alignment stage.")
-    parser.add_argument(
-        "--vision-encoder",
-        choices=["siglip", "moonvit"],
-        default="siglip",
-        help="Vision encoder to use (default: siglip).",
-    )
-    parser.add_argument(
-        "--llm",
-        choices=["base", "global"],
-        default="base",
-        help="LLM variant to use (default: base).",
-    )
-    parser.add_argument(
-        "--resume",
-        default=None,
-        metavar="RUN_ID",
-        help="Resume training from an existing run ID.",
-    )
-    parser.add_argument(
-        "--models-dir",
-        default=None,
-        help="Directory to save checkpoints (overrides AlignmentConfig.models_dir).",
-    )
-    parser.add_argument(
-        "--data-dir",
-        default=None,
-        help="Path to LLaVA-Pretrain data (overrides AlignmentConfig.data_dir). "
-             "Run scripts/download_llava_pretrain.py first to populate this directory.",
-    )
-    args = parser.parse_args()
-
-    training_config = AlignmentConfig()
-    if args.models_dir is not None:
-        training_config.models_dir = args.models_dir
-    if args.data_dir is not None:
-        training_config.data_dir = args.data_dir
-
-    main(
-        training_config=training_config,
-        model_config=TinyAyaVisionConfig.for_encoder(args.vision_encoder, llm=args.llm),
-        resume_run_id=args.resume,
-    )
+    main()
