@@ -27,3 +27,17 @@ UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu uv sync
 # CUDA 12.1
 UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu121 uv sync
 ```
+
+## Get Started
+
+Download the dataset
+
+```bash
+python scripts/download_llava_pretrain.py --output-dir data/llava-pretrain
+```
+
+Train Alignment
+
+```bash
+python pipeline/train_alignment.py --vision-encoder siglip --llm global --models-dir outputs/checkpoints --data-dir data/llava-pretrain
+```
