@@ -32,10 +32,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Dict
+
+# Ensure project root is importable (consistent with apply_lora.py)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 from transformers import AutoModelForCausalLM
@@ -56,7 +58,6 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 LLM_PREFIX = "language_model."
 PROJECTOR_PREFIX = "multi_modal_projector."
-VISION_PREFIX = "vision_encoder."
 
 
 # ---------------------------------------------------------------------------
@@ -247,18 +248,27 @@ def _load_finetuned_vlm(checkpoint_path: str, device: str) -> Dict[str, torch.Te
 
     # Try directory: look for a state dict file
     if p.is_dir():
-        candidates = list(p.glob("*.pt")) + list(p.glob("*.pth"))
+        candidates = (
+            list(p.glob("*.pt"))
+            + list(p.glob("*.pth"))
+            + list(p.glob("*.safetensors"))
+        )
         if not candidates:
             raise FileNotFoundError(
-                f"No .pt / .pth checkpoint file found in '{checkpoint_path}'. "
-                "Pass the path to a .pt file directly, or ensure the directory "
-                "contains one."
+                f"No .pt / .pth / .safetensors checkpoint file found in "
+                f"'{checkpoint_path}'. Pass the path to a checkpoint file "
+                "directly, or ensure the directory contains one."
             )
         checkpoint_path = str(candidates[0])
         log.info("Found checkpoint file: %s", checkpoint_path)
 
     log.info("Loading fine-tuned VLM state dict from '%s' …", checkpoint_path)
-    state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+
+    if checkpoint_path.endswith(".safetensors"):
+        from safetensors.torch import load_file
+        state = load_file(checkpoint_path, device=device)
+    else:
+        state = torch.load(checkpoint_path, map_location=device, weights_only=True)
 
     # unwrap common wrappers
     if isinstance(state, dict) and "state_dict" in state:

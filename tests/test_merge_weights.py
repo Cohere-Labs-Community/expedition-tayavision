@@ -7,28 +7,20 @@ Run with:
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 import torch
 
-# ---------------------------------------------------------------------------
-# Make sure the project root is on the path so we can import the script
-# regardless of how pytest is invoked.
-# ---------------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).parent.parent  # expedition-tayavision/
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
-
-from merge_weights import (  # noqa: E402
+from scripts.merge_weights import (  # noqa: E402
     LLM_PREFIX,
     PROJECTOR_PREFIX,
     build_merged_vlm_state,
     extract_llm_state_dict,
     extract_non_llm_state_dict,
     lerp_state_dicts,
+    parse_args,
 )
 
 
@@ -41,20 +33,27 @@ def _make_state(keys: list[str], shape=(4, 4)) -> dict[str, torch.Tensor]:
     return {k: torch.randn(*shape) for k in keys}
 
 
+VISION_PREFIX = "vision_encoder."
+
+
 def _make_vlm_state(
     llm_keys: list[str] | None = None,
     projector_keys: list[str] | None = None,
+    vision_keys: list[str] | None = None,
     shape=(4, 4),
 ) -> dict[str, torch.Tensor]:
-    """Build a synthetic VLM state dict with LLM and projector keys."""
+    """Build a synthetic VLM state dict with LLM, projector, and vision keys."""
     llm_keys = llm_keys or ["weight", "bias"]
     projector_keys = projector_keys or ["linear_1.weight", "linear_1.bias"]
+    vision_keys = vision_keys or ["vision_model.embeddings.weight"]
 
     state: dict[str, torch.Tensor] = {}
     for k in llm_keys:
         state[f"{LLM_PREFIX}{k}"] = torch.randn(*shape)
     for k in projector_keys:
         state[f"{PROJECTOR_PREFIX}{k}"] = torch.randn(*shape)
+    for k in vision_keys:
+        state[f"{VISION_PREFIX}{k}"] = torch.randn(*shape)
     return state
 
 
@@ -141,6 +140,23 @@ class TestExtractStateDicts:
         vlm_state = _make_vlm_state()
         llm = extract_llm_state_dict(vlm_state)
         assert all(not k.startswith(PROJECTOR_PREFIX) for k in llm)
+        assert all(not k.startswith(VISION_PREFIX) for k in llm)
+
+    def test_extract_non_llm_includes_vision_keys(self):
+        """Vision encoder keys must appear in the non-LLM dict."""
+        vlm_state = _make_vlm_state()
+        non_llm = extract_non_llm_state_dict(vlm_state)
+        vision_keys = [k for k in non_llm if k.startswith(VISION_PREFIX)]
+        assert len(vision_keys) > 0, "Vision encoder keys should be in non-LLM state"
+
+    def test_extract_non_llm_includes_both_projector_and_vision(self):
+        """Non-LLM dict must contain both projector and vision encoder keys."""
+        vlm_state = _make_vlm_state()
+        non_llm = extract_non_llm_state_dict(vlm_state)
+        has_proj = any(k.startswith(PROJECTOR_PREFIX) for k in non_llm)
+        has_vision = any(k.startswith(VISION_PREFIX) for k in non_llm)
+        assert has_proj, "Projector keys missing from non-LLM state"
+        assert has_vision, "Vision encoder keys missing from non-LLM state"
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +227,7 @@ class TestBuildMergedVlmState:
 class TestOutputFile:
     def test_merged_state_pt_is_created(self):
         """The script's _save_outputs writes merged_state.pt to the output dir."""
-        from merge_weights import _save_outputs  # noqa: PLC0415
+        from scripts.merge_weights import _save_outputs  # noqa: PLC0415
 
         state = {"language_model.weight": torch.randn(4, 4)}
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -229,7 +245,7 @@ class TestOutputFile:
 
     def test_saved_file_dtype(self):
         """Weights are cast to the requested dtype before saving."""
-        from merge_weights import _save_outputs  # noqa: PLC0415
+        from scripts.merge_weights import _save_outputs  # noqa: PLC0415
 
         state = {"language_model.w": torch.randn(4, 4, dtype=torch.float32)}
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -243,3 +259,53 @@ class TestOutputFile:
             saved = torch.load(Path(tmpdir) / "merged_state.pt", weights_only=True)
 
         assert saved["language_model.w"].dtype == torch.float16
+
+
+# ---------------------------------------------------------------------------
+# CLI argument parsing
+# ---------------------------------------------------------------------------
+
+class TestParseArgs:
+    def test_required_args(self):
+        """All four required args must be accepted."""
+        args = parse_args([
+            "--original", "some/model",
+            "--finetuned", "some/checkpoint",
+            "--alpha", "0.5",
+            "--output", "some/output",
+        ])
+        assert args.original == "some/model"
+        assert args.finetuned == "some/checkpoint"
+        assert args.alpha == 0.5
+        assert args.output == "some/output"
+
+    def test_default_dtype_is_bfloat16(self):
+        args = parse_args([
+            "--original", "x", "--finetuned", "x",
+            "--alpha", "0.5", "--output", "x",
+        ])
+        assert args.dtype == "bfloat16"
+
+    def test_default_device_is_cpu(self):
+        args = parse_args([
+            "--original", "x", "--finetuned", "x",
+            "--alpha", "0.5", "--output", "x",
+        ])
+        assert args.device == "cpu"
+
+    def test_save_hf_defaults_to_false(self):
+        args = parse_args([
+            "--original", "x", "--finetuned", "x",
+            "--alpha", "0.5", "--output", "x",
+        ])
+        assert args.save_hf is False
+
+    def test_alpha_in_sweep_range(self):
+        """All recommended sweep values should parse correctly."""
+        for alpha_val in ["0.3", "0.4", "0.5", "0.6", "0.7"]:
+            args = parse_args([
+                "--original", "x", "--finetuned", "x",
+                "--alpha", alpha_val, "--output", "x",
+            ])
+            assert args.alpha == float(alpha_val)
+
