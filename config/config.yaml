@@ -10,4 +10,3 @@ wandb:
   project: tayavision
   entity: null
   mode: online
-resume: null
