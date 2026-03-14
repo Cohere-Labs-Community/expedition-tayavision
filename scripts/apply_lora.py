@@ -28,7 +28,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import torch
 import torch.nn as nn
 from peft import get_peft_model
 
@@ -190,20 +189,39 @@ def main() -> None:
     parser.add_argument(
         "--layers-start",
         type=int,
-        default=18,
-        help="First LLM layer index to apply LoRA (default: 18).",
+        default=None,
+        help="First LLM layer index to apply LoRA (default: num_llm_layers // 2).",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="base",
+        choices=["base", "global"],
+        help="Which Tiny Aya LLM backbone to use (default: base).",
     )
     args = parser.parse_args()
 
+    vlm_config = (
+        TinyAyaVisionConfig.for_global()
+        if args.model == "global"
+        else TinyAyaVisionConfig.for_base()
+    )
+
     alpha = args.alpha if args.alpha is not None else args.rank * 2
+    layers_start = (
+        args.layers_start
+        if args.layers_start is not None
+        else vlm_config.num_llm_layers // 2
+    )
 
     lora_config = LoraAdapterConfig(
         rank=args.rank,
         lora_alpha=alpha,
-        layers_to_transform=list(range(args.layers_start, 36)),
+        layers_to_transform=list(range(layers_start, vlm_config.num_llm_layers)),
     )
 
-    print(f"LoRA config:")
+    print(f"Model: {vlm_config.llm_model_name}")
+    print("LoRA config:")
     print(f"  rank={lora_config.rank}, alpha={lora_config.lora_alpha} "
           f"(scale={lora_config.lora_alpha / lora_config.rank:.1f})")
     print(f"  layers: {lora_config.layers_to_transform[0]}–"
@@ -211,7 +229,6 @@ def main() -> None:
           f"({len(lora_config.layers_to_transform)} layers)")
     print(f"  target modules: {lora_config.target_modules}")
 
-    vlm_config = TinyAyaVisionConfig()
     model = apply_lora(vlm_config, lora_config)
     print_param_summary(model)
 

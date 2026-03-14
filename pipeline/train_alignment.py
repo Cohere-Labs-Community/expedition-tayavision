@@ -77,18 +77,20 @@ def train(
                 lr_scheduler.step()
                 optimizer.zero_grad()
 
+                opt_step = (step + 1) // training_config.grad_acc_steps
                 wandb.log({
                     "train/loss": accumulated_loss,
                     "train/grad_norm": grad_norm.item(),
                     "train/lr": lr_scheduler.get_last_lr()[0],
-                }, step=(step + 1) // training_config.grad_acc_steps)
+                }, step=opt_step)
+
+                if opt_step % training_config.logging_steps == 0:
+                    print(f"Epoch {epoch}, Opt Step {opt_step}, Loss {accumulated_loss:.4f}, LR {lr_scheduler.get_last_lr()[0]}")
+
+                if opt_step % training_config.save_steps == 0:
+                    save_checkpoint(checkpoint_dir, step + 1, model, optimizer, lr_scheduler)
+
                 accumulated_loss = 0.0
-
-            if (step + 1) % training_config.logging_steps == 0:
-                print(f"Epoch {epoch}, Step {step + 1}, Loss {loss.item()}, LR {lr_scheduler.get_last_lr()[0]}")
-
-            if (step + 1) % training_config.save_steps == 0:
-                save_checkpoint(checkpoint_dir, step + 1, model, optimizer, lr_scheduler)
 
     save_checkpoint(checkpoint_dir, step + 1, model, optimizer, lr_scheduler)
     print("Training complete")
@@ -99,6 +101,9 @@ def main(
     model_config: TinyAyaVisionConfig,
     resume_run_id: str | None = None,
 ):
+    torch.manual_seed(training_config.seed)
+    torch.cuda.manual_seed_all(training_config.seed)
+
     if resume_run_id:
         run_id = resume_run_id
     else:
@@ -145,9 +150,9 @@ def main(
     model.vision_encoder.to(dtype=compute_dtype)
     model.language_model.to(dtype=compute_dtype)
 
-    model = torch.compile(model)
-
     model.language_model.gradient_checkpointing_enable()
+
+    model = torch.compile(model)
 
     resume_step = 0
     if resume_run_id:
@@ -167,8 +172,8 @@ def main(
         data_dir=training_config.data_dir,
     )
 
-    # When resuming, skip already-seen samples so the DataLoader doesn't waste
-    # time loading them. Since data is shuffled, exact sample order doesn't matter.
+    full_dataset_len = len(dataset)
+
     samples_to_skip = resume_step * training_config.batch_size
     if samples_to_skip > 0 and samples_to_skip < len(dataset):
         remaining_indices = list(range(samples_to_skip, len(dataset)))
@@ -192,7 +197,8 @@ def main(
         weight_decay=training_config.weight_decay,
     )
 
-    total_steps = training_config.num_epochs * len(loader)
+    full_loader_len = full_dataset_len // training_config.batch_size
+    total_steps = training_config.num_epochs * full_loader_len // training_config.grad_acc_steps
     warmup_steps = int(total_steps * training_config.warmup_ratio)
 
     if training_config.lr_scheduler_type == "cosine":

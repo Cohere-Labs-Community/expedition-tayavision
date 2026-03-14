@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 
@@ -23,10 +25,11 @@ class TinyAyaVisionConfig:
     connector_intermediate_size: int = 2048  # matches LLM hidden_size
     adapter_layer_norm_eps: float = 1e-6
 
-    # LLM backbone (Tiny Aya Base)
+    # LLM backbone
     llm_model_name: str = "CohereLabs/tiny-aya-base"
     llm_hidden_size: int = 2048
     llm_vocab_size: int = 262144
+    num_llm_layers: int = 36  # Cohere2: 36 transformer layers
 
     # Special tokens
     image_token: str = "<image>"
@@ -38,3 +41,13 @@ class TinyAyaVisionConfig:
     vision_feature_layer: int = -1
     # "full" = all patches, "default" = crop CLS
     vision_feature_select_strategy: str = "full"
+
+    @classmethod
+    def for_base(cls) -> TinyAyaVisionConfig:
+        """Config for CohereLabs/tiny-aya-base (pretrained base model)."""
+        return cls(llm_model_name="CohereLabs/tiny-aya-base")
+
+    @classmethod
+    def for_global(cls) -> TinyAyaVisionConfig:
+        """Config for CohereLabs/tiny-aya-global (instruction-tuned, best multilingual balance)."""
+        return cls(llm_model_name="CohereLabs/tiny-aya-global")
