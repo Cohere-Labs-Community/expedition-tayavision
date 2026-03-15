@@ -1,0 +1,8 @@
+vision_encoder_type: moonvit
+vision_model_name: moonshotai/MoonViT-SO-400M
+vision_hidden_size: 1152
+connector_type: linear_mlp   # no pixel shuffle; MoonViT internally tiles
+tokens_per_tile: 4           # MoonViT outputs 4 sub-tokens per tile
+trust_remote_code: true
+# num_tokens_after_shuffle is not used for moonvit (token count is dynamic)
+num_tokens_after_shuffle: -1

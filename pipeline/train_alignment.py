@@ -1,9 +1,12 @@
 import json
 import re
+import sys
 import uuid
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 import wandb
@@ -232,7 +235,48 @@ def main(
     wandb.finish()
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train Tiny Aya Vision alignment stage.")
+    parser.add_argument(
+        "--vision-encoder",
+        choices=["siglip", "moonvit"],
+        default="siglip",
+        help="Vision encoder to use (default: siglip).",
+    )
+    parser.add_argument(
+        "--llm",
+        choices=["base", "global"],
+        default="base",
+        help="LLM variant to use (default: base).",
+    )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        metavar="RUN_ID",
+        help="Resume training from an existing run ID.",
+    )
+    parser.add_argument(
+        "--models-dir",
+        default=None,
+        help="Directory to save checkpoints (overrides AlignmentConfig.models_dir).",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Path to LLaVA-Pretrain data (overrides AlignmentConfig.data_dir). "
+             "Run scripts/download_llava_pretrain.py first to populate this directory.",
+    )
+    args = parser.parse_args()
+
+    training_config = AlignmentConfig()
+    if args.models_dir is not None:
+        training_config.models_dir = args.models_dir
+    if args.data_dir is not None:
+        training_config.data_dir = args.data_dir
+
     main(
-        training_config=AlignmentConfig(),
-        model_config=TinyAyaVisionConfig(),
+        training_config=training_config,
+        model_config=TinyAyaVisionConfig.for_encoder(args.vision_encoder, llm=args.llm),
+        resume_run_id=args.resume,
     )

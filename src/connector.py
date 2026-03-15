@@ -129,3 +129,74 @@ class MultiModalProjector(nn.Module):
 
         hidden_states = self.linear_2(hidden_states)
         return hidden_states
+
+
+class LinearMLPProjector(nn.Module):
+    """Vision-language connector using a SwiGLU MLP (no Pixel Shuffle).
+
+    Used with MoonViT, which handles tiling and spatial compression internally.
+    Projects each token from vision_hidden_size to llm_hidden_size without
+    changing the token count.
+
+    Data flow:
+        (..., vision_hidden_size)
+        -> LayerNorm
+        -> Linear(vision_hidden_size, connector_intermediate_size)
+        -> SwiGLU (chunk + SiLU gate)
+        (..., connector_intermediate_size // 2)
+        -> Linear(connector_intermediate_size // 2, llm_hidden_size)
+        (..., llm_hidden_size)
+    """
+
+    def __init__(self, config: TinyAyaVisionConfig):
+        super().__init__()
+        self.layernorm = nn.LayerNorm(
+            config.vision_hidden_size, eps=config.adapter_layer_norm_eps
+        )
+        self.linear_1 = nn.Linear(
+            config.vision_hidden_size, config.connector_intermediate_size, bias=True
+        )
+        self.act = nn.SiLU()
+        self.linear_2 = nn.Linear(
+            config.connector_intermediate_size // 2,
+            config.llm_hidden_size,
+            bias=True,
+        )
+
+    def forward(self, image_features: torch.Tensor) -> torch.Tensor:
+        """Project vision features into the LLM embedding space.
+
+        Args:
+            image_features: (..., vision_hidden_size) — any leading dims.
+
+        Returns:
+            (..., llm_hidden_size).
+        """
+        image_features = self.layernorm(image_features)
+        hidden_states = self.linear_1(image_features)
+
+        x, gate = hidden_states.chunk(2, dim=-1)
+        hidden_states = self.act(gate) * x
+
+        return self.linear_2(hidden_states)
+
+
+def create_projector(config: TinyAyaVisionConfig) -> nn.Module:
+    """Factory: instantiate the correct connector for the given config.
+
+    Args:
+        config: Model config with connector_type "pixel_shuffle" or "linear_mlp".
+
+    Returns:
+        An nn.Module projector.
+    """
+    projectors = {
+        "pixel_shuffle": MultiModalProjector,
+        "linear_mlp": LinearMLPProjector,
+    }
+    if config.connector_type not in projectors:
+        raise ValueError(
+            f"Unknown connector_type '{config.connector_type}'. "
+            f"Choose from: {list(projectors)}"
+        )
+    return projectors[config.connector_type](config)

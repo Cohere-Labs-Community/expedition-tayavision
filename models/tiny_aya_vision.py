@@ -6,8 +6,8 @@ from transformers import AutoModelForCausalLM, GenerationMixin
 from transformers.modeling_outputs import ModelOutput
 
 from config.model_config import TinyAyaVisionConfig
-from src.connector import MultiModalProjector
-from src.vision_encoder import VisionEncoder
+from src.connector import create_projector
+from src.vision_encoders import create_vision_encoder
 
 
 @dataclass
@@ -23,11 +23,12 @@ class TinyAyaVisionOutput(ModelOutput):
 
 
 class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
-    """Tiny Aya Vision: multilingual VLM connecting SigLIP2 to Tiny Aya Base.
+    """Tiny Aya Vision: multilingual VLM connecting a vision encoder to Tiny Aya Base.
 
     Architecture:
-        SigLIP2-so400m (frozen) -> Pixel Shuffle -> SwiGLU MLP -> Cohere2 LLM
+        VisionEncoder (frozen) -> Connector -> Cohere2 LLM
 
+    Supports swappable vision encoders (SigLIP, MoonViT) via TinyAyaVisionConfig.
     The model replaces <image> placeholder tokens in the text sequence with
     projected vision features, then runs the combined sequence through the LLM.
     """
@@ -39,12 +40,12 @@ class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
         super().__init__()
         self.vlm_config = config
 
-        # Vision encoder (frozen)
-        self.vision_encoder = VisionEncoder(config)
+        # Vision encoder (frozen) — selected by config.vision_encoder_type
+        self.vision_encoder = create_vision_encoder(config)
 
         # Vision-language connector (trainable), cast to configured dtype so
         # it matches the bfloat16 outputs from the frozen vision encoder.
-        self.multi_modal_projector = MultiModalProjector(config).to(
+        self.multi_modal_projector = create_projector(config).to(
             getattr(torch, config.torch_dtype)
         )
 
@@ -100,48 +101,76 @@ class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
     def set_input_embeddings(self, value):
         self.language_model.set_input_embeddings(value)
 
-    def get_image_features(self, pixel_values: torch.Tensor) -> torch.Tensor:
+    def get_image_features(
+        self,
+        pixel_values: torch.Tensor,
+        image_grid_hws: torch.Tensor | None = None,
+    ) -> torch.Tensor | list[torch.Tensor]:
         """Extract and project image features.
 
         Args:
-            pixel_values: (B, C, H, W) preprocessed images.
+            pixel_values: Preprocessed image tensor(s).
+            image_grid_hws: (B, 2) tile-grid dimensions, required for MoonViT.
 
         Returns:
-            (B, num_tokens_after_shuffle, llm_hidden_size) projected features.
+            SigLIP: (B, num_tokens_after_shuffle, llm_hidden_size) tensor.
+            MoonViT: list of (N_tiles_i * tokens_per_tile, llm_hidden_size) tensors,
+                     one per image.
         """
-        vision_features = self.vision_encoder(pixel_values)
-        return self.multi_modal_projector(vision_features)
+        if self.vlm_config.vision_encoder_type == "moonvit":
+            # Returns list of (N_tiles_i, tokens_per_tile, D) tensors
+            raw_features = self.vision_encoder(pixel_values, image_grid_hws=image_grid_hws)
+            projected = []
+            for feat in raw_features:
+                # (N_tiles, tokens_per_tile, D) -> (N_tiles * tokens_per_tile, D)
+                feat = feat.view(-1, feat.shape[-1])
+                proj = self.multi_modal_projector(feat)  # (T, llm_hidden_size)
+                projected.append(proj)
+            return projected
+        else:
+            vision_features = self.vision_encoder(pixel_values)
+            return self.multi_modal_projector(vision_features)
 
     def _merge_image_features(
         self,
         input_ids: torch.LongTensor,
         inputs_embeds: torch.Tensor,
-        image_features: torch.Tensor,
+        image_features: torch.Tensor | list[torch.Tensor],
     ) -> torch.Tensor:
         """Replace <image> placeholder tokens with projected vision features.
 
-        Uses masked_scatter following Aya Vision's approach.
+        For SigLIP: image_features is (B, T, D) — uses masked_scatter directly.
+        For MoonViT: image_features is a list of (T_i, D) tensors — concatenated
+                     then scattered into the placeholder positions in order.
         """
         special_image_mask = input_ids == self.image_token_id
 
+        if isinstance(image_features, list):
+            # MoonViT: concatenate all per-image features, scatter in sequence order
+            flat_features = torch.cat(image_features, dim=0)  # (sum(T_i), D)
+        else:
+            # SigLIP: flatten (B, T, D) -> (B*T, D)
+            flat_features = image_features.reshape(-1, image_features.shape[-1])
+
         n_image_tokens = special_image_mask.sum().item()
-        n_image_features = image_features.shape[0] * image_features.shape[1]
+        n_image_features = flat_features.shape[0]
         if n_image_tokens != n_image_features:
             raise ValueError(
                 f"Image token count ({n_image_tokens}) != image feature count "
-                f"({n_image_features}). Each image needs exactly "
-                f"{self.vlm_config.num_tokens_after_shuffle} <image> tokens."
+                f"({n_image_features}). Ensure the text has the correct number of "
+                f"<image> placeholder tokens for this encoder."
             )
 
         special_image_mask = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds)
-        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
-        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+        flat_features = flat_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, flat_features)
         return inputs_embeds
 
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
         pixel_values: torch.FloatTensor | None = None,
+        image_grid_hws: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         position_ids: torch.LongTensor | None = None,
         past_key_values: tuple | None = None,
@@ -157,6 +186,7 @@ class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
         and pixel_values. The <image> tokens are replaced with projected vision
         features before being passed to the LLM.
 
+        For MoonViT: also pass image_grid_hws from the processor output.
         For text-only input: pass input_ids without pixel_values.
         """
         if inputs_embeds is None:
@@ -165,7 +195,7 @@ class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
         # Merge image features into the text embedding sequence
         image_features = None
         if pixel_values is not None:
-            image_features = self.get_image_features(pixel_values)
+            image_features = self.get_image_features(pixel_values, image_grid_hws)
             inputs_embeds = self._merge_image_features(
                 input_ids, inputs_embeds, image_features
             )
@@ -187,7 +217,7 @@ class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
             past_key_values=outputs.past_key_values,
             hidden_states=getattr(outputs, "hidden_states", None),
             attentions=getattr(outputs, "attentions", None),
-            image_hidden_states=image_features,
+            image_hidden_states=image_features if not isinstance(image_features, list) else None,
         )
 
     def prepare_inputs_for_generation(
@@ -196,6 +226,7 @@ class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
         past_key_values=None,
         inputs_embeds=None,
         pixel_values=None,
+        image_grid_hws=None,
         attention_mask=None,
         cache_position=None,
         **kwargs,
@@ -220,5 +251,7 @@ class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
         )
         if is_first:
             model_inputs["pixel_values"] = pixel_values
+            if image_grid_hws is not None:
+                model_inputs["image_grid_hws"] = image_grid_hws
 
         return model_inputs

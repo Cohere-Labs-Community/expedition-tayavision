@@ -33,7 +33,7 @@ class AlignmentDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         image_path = self.data_dir / item["image"]
-        image = Image.open(image_path)
+        image = Image.open(image_path).convert("RGB")
 
         prompt = item["conversations"][0]["value"]
         response = item["conversations"][1]["value"]
