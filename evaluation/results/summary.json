@@ -1,0 +1,300 @@
+{
+  "xmmmu": {
+    "benchmark": "XMMMU",
+    "overall_accuracy": 30.57,
+    "total_correct": 794,
+    "total_samples": 2597,
+    "per_language": {
+      "ar": {
+        "correct": 82,
+        "total": 298,
+        "accuracy": 27.52
+      },
+      "fr": {
+        "correct": 94,
+        "total": 298,
+        "accuracy": 31.54
+      },
+      "hi": {
+        "correct": 75,
+        "total": 291,
+        "accuracy": 25.77
+      },
+      "id": {
+        "correct": 91,
+        "total": 297,
+        "accuracy": 30.64
+      },
+      "ja": {
+        "correct": 81,
+        "total": 269,
+        "accuracy": 30.11
+      },
+      "pt": {
+        "correct": 95,
+        "total": 297,
+        "accuracy": 31.99
+      },
+      "en": {
+        "correct": 276,
+        "total": 847,
+        "accuracy": 32.59
+      }
+    },
+    "time_seconds": 1908.6
+  },
+  "kaleidoscope": {
+    "benchmark": "Kaleidoscope",
+    "overall_accuracy": 29.4,
+    "text_only_accuracy": 30.07,
+    "total_correct": 6148,
+    "total_samples": 20911,
+    "text_only_correct": 2989,
+    "text_only_samples": 9941,
+    "per_language": {
+      "ar": {
+        "correct": 105,
+        "total": 382,
+        "accuracy": 27.49,
+        "text_only_correct": 64,
+        "text_only_total": 218,
+        "text_only_accuracy": 29.36
+      },
+      "bn": {
+        "correct": 239,
+        "total": 800,
+        "accuracy": 29.88,
+        "text_only_correct": 121,
+        "text_only_total": 401,
+        "text_only_accuracy": 30.17
+      },
+      "de": {
+        "correct": 338,
+        "total": 722,
+        "accuracy": 46.81,
+        "text_only_correct": 176,
+        "text_only_total": 361,
+        "text_only_accuracy": 48.75
+      },
+      "en": {
+        "correct": 566,
+        "total": 1628,
+        "accuracy": 34.77,
+        "text_only_correct": 325,
+        "text_only_total": 814,
+        "text_only_accuracy": 39.93
+      },
+      "es": {
+        "correct": 491,
+        "total": 1482,
+        "accuracy": 33.13,
+        "text_only_correct": 273,
+        "text_only_total": 753,
+        "text_only_accuracy": 36.25
+      },
+      "fa": {
+        "correct": 518,
+        "total": 2000,
+        "accuracy": 25.9,
+        "text_only_correct": 269,
+        "text_only_total": 1036,
+        "text_only_accuracy": 25.97
+      },
+      "fr": {
+        "correct": 173,
+        "total": 762,
+        "accuracy": 22.7,
+        "text_only_correct": 88,
+        "text_only_total": 381,
+        "text_only_accuracy": 23.1
+      },
+      "hi": {
+        "correct": 516,
+        "total": 1886,
+        "accuracy": 27.36,
+        "text_only_correct": 241,
+        "text_only_total": 888,
+        "text_only_accuracy": 27.14
+      },
+      "hr": {
+        "correct": 85,
+        "total": 324,
+        "accuracy": 26.23,
+        "text_only_correct": 43,
+        "text_only_total": 162,
+        "text_only_accuracy": 26.54
+      },
+      "hu": {
+        "correct": 309,
+        "total": 1120,
+        "accuracy": 27.59,
+        "text_only_correct": 140,
+        "text_only_total": 560,
+        "text_only_accuracy": 25.0
+      },
+      "lt": {
+        "correct": 211,
+        "total": 680,
+        "accuracy": 31.03,
+        "text_only_correct": 110,
+        "text_only_total": 343,
+        "text_only_accuracy": 32.07
+      },
+      "ne": {
+        "correct": 32,
+        "total": 126,
+        "accuracy": 25.4,
+        "text_only_correct": 0,
+        "text_only_total": 0,
+        "text_only_accuracy": 0.0
+      },
+      "nl": {
+        "correct": 283,
+        "total": 1018,
+        "accuracy": 27.8,
+        "text_only_correct": 152,
+        "text_only_total": 562,
+        "text_only_accuracy": 27.05
+      },
+      "pt": {
+        "correct": 610,
+        "total": 2000,
+        "accuracy": 30.5,
+        "text_only_correct": 423,
+        "text_only_total": 1311,
+        "text_only_accuracy": 32.27
+      },
+      "ru": {
+        "correct": 502,
+        "total": 1744,
+        "accuracy": 28.78,
+        "text_only_correct": 244,
+        "text_only_total": 872,
+        "text_only_accuracy": 27.98
+      },
+      "sr": {
+        "correct": 515,
+        "total": 2000,
+        "accuracy": 25.75,
+        "text_only_correct": 253,
+        "text_only_total": 1000,
+        "text_only_accuracy": 25.3
+      },
+      "te": {
+        "correct": 329,
+        "total": 1000,
+        "accuracy": 32.9,
+        "text_only_correct": 0,
+        "text_only_total": 0,
+        "text_only_accuracy": 0.0
+      },
+      "uk": {
+        "correct": 326,
+        "total": 1237,
+        "accuracy": 26.35,
+        "text_only_correct": 67,
+        "text_only_total": 279,
+        "text_only_accuracy": 24.01
+      }
+    },
+    "time_seconds": 13111.5
+  },
+  "maxm": {
+    "benchmark": "MaXM",
+    "overall_accuracy": 21.96,
+    "total_correct": 415,
+    "total_samples": 1890,
+    "per_language": {
+      "en": {
+        "correct": 70,
+        "total": 257,
+        "accuracy": 27.24
+      },
+      "fr": {
+        "correct": 64,
+        "total": 264,
+        "accuracy": 24.24
+      },
+      "hi": {
+        "correct": 49,
+        "total": 260,
+        "accuracy": 18.85
+      },
+      "iw": {
+        "correct": 71,
+        "total": 280,
+        "accuracy": 25.36
+      },
+      "ro": {
+        "correct": 59,
+        "total": 284,
+        "accuracy": 20.77
+      },
+      "th": {
+        "correct": 41,
+        "total": 268,
+        "accuracy": 15.3
+      },
+      "zh": {
+        "correct": 61,
+        "total": 277,
+        "accuracy": 22.02
+      }
+    },
+    "time_seconds": 1304.7
+  },
+  "mtvqa": {
+    "benchmark": "MTVQA",
+    "overall_accuracy": 6.31,
+    "total_correct": 428,
+    "total_samples": 6778,
+    "per_language": {
+      "AR": {
+        "correct": 51,
+        "total": 703,
+        "accuracy": 7.25
+      },
+      "DE": {
+        "correct": 91,
+        "total": 1048,
+        "accuracy": 8.68
+      },
+      "FR": {
+        "correct": 117,
+        "total": 886,
+        "accuracy": 13.21
+      },
+      "IT": {
+        "correct": 42,
+        "total": 884,
+        "accuracy": 4.75
+      },
+      "JA": {
+        "correct": 34,
+        "total": 828,
+        "accuracy": 4.11
+      },
+      "KR": {
+        "correct": 23,
+        "total": 558,
+        "accuracy": 4.12
+      },
+      "RU": {
+        "correct": 27,
+        "total": 756,
+        "accuracy": 3.57
+      },
+      "TH": {
+        "correct": 3,
+        "total": 231,
+        "accuracy": 1.3
+      },
+      "VI": {
+        "correct": 40,
+        "total": 884,
+        "accuracy": 4.52
+      }
+    },
+    "time_seconds": 4837.6
+  }
+}
