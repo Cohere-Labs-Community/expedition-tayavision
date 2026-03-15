@@ -18,6 +18,7 @@ class VisionEncoder(nn.Module):
         self.vision_model = SiglipVisionModel.from_pretrained(
             config.vision_model_name,
             torch_dtype=getattr(torch, config.torch_dtype),
+            cache_dir=config.cache_dir,
         )
         self.vision_model.requires_grad_(False)
 

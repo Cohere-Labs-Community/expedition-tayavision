@@ -25,3 +25,20 @@ class AlignmentConfig:
     save_steps: int = 500
     logging_steps: int = 10
     seed: int = 42
+
+
+@dataclass
+class InstructConfig(AlignmentConfig):
+    """Config for instruction-finetuning with LLaVA-Instruct-150K."""
+
+    dataset_name: str = "liuhaotian/LLaVA-Instruct-150K"
+    data_dir: str = "/data/llava-instruct"
+
+    models_dir: str = "/models"
+
+    batch_size: int = 128  # global batch size across all GPUs(per-gpu batch size * world_size)
+    grad_acc_steps: int = 32
+    learning_rate: float = 2e-5
+
+    # Path to alignment checkpoint (.pt) to initialise the projector from
+    alignment_checkpoint: str = ""

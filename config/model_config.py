@@ -42,6 +42,8 @@ class TinyAyaVisionConfig:
     # "full" = all patches, "default" = crop CLS
     vision_feature_select_strategy: str = "full"
 
+    cache_dir: str = ""  # adjust this path as needed
+
     @classmethod
     def for_base(cls) -> TinyAyaVisionConfig:
         """Config for CohereLabs/tiny-aya-base (pretrained base model)."""

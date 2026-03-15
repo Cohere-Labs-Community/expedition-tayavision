@@ -52,6 +52,7 @@ class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
         self.language_model = AutoModelForCausalLM.from_pretrained(
             config.llm_model_name,
             torch_dtype=getattr(torch, config.torch_dtype),
+            cache_dir=config.cache_dir,
         )
 
         # Expose the LLM's PretrainedConfig as self.config so GenerationMixin
