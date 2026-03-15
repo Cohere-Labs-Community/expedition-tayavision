@@ -52,6 +52,11 @@ class MultiModalProjector(nn.Module):
             bias=True,
         )
 
+        if config.post_projector_rms_norm:
+            self.rms_norm = nn.RMSNorm(config.llm_hidden_size)
+        else:
+            self.rms_norm = None
+
     def pixel_shuffle(self, image_features: torch.Tensor) -> torch.Tensor:
         """Compress vision tokens by grouping 2x2 spatial patches.
 
@@ -128,4 +133,6 @@ class MultiModalProjector(nn.Module):
         hidden_states = self.act(gate) * x
 
         hidden_states = self.linear_2(hidden_states)
+        if self.rms_norm is not None:
+            hidden_states = self.rms_norm(hidden_states)
         return hidden_states

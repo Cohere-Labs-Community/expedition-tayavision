@@ -54,9 +54,11 @@ class Trainer:
         from pipeline.train_alignment import main
 
         overrides = json.loads(config_json) if config_json else {}
+        training_overrides = overrides.get("training", {})
+        model_overrides = overrides.get("model", {})
         main(
-            training_config=AlignmentConfig(**overrides),
-            model_config=TinyAyaVisionConfig(),
+            training_config=AlignmentConfig(**training_overrides),
+            model_config=TinyAyaVisionConfig(**model_overrides),
             resume_run_id=resume_run_id,
         )
 

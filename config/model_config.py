@@ -24,6 +24,7 @@ class TinyAyaVisionConfig:
     # Vision-Language connector (2-layer MLP with SwiGLU)
     connector_intermediate_size: int = 2048  # matches LLM hidden_size
     adapter_layer_norm_eps: float = 1e-6
+    post_projector_rms_norm: bool = False
 
     # LLM backbone
     llm_model_name: str = "CohereLabs/tiny-aya-base"
