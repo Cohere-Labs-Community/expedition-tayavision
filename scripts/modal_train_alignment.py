@@ -3,12 +3,18 @@ Run alignment training on Modal.
 
 Usage:
     modal run --detach scripts/modal_train_alignment.py
-    modal run --detach scripts/modal_train_alignment.py --vision siglip --gpu A10G
-    modal run --detach scripts/modal_train_alignment.py --vision moonvit --gpu A100
+    modal run --detach scripts/modal_train_alignment.py --vision siglip
+    MODAL_GPU=A100-80GB modal run --detach scripts/modal_train_alignment.py --vision moonvit
     modal run --detach scripts/modal_train_alignment.py --resume-run-id <id>
 """
 
+import os
+
 import modal
+
+# Read GPU from MODAL_GPU env var so it can be set before the app is created.
+# Usage: MODAL_GPU=A100-80GB modal run --detach scripts/modal_train_alignment.py --vision moonvit
+GPU = os.environ.get("MODAL_GPU", "A10G")
 
 app = modal.App("tayavision-train-alignment")
 volume = modal.Volume.from_name("tayavision-data")
@@ -41,31 +47,29 @@ image = (
 )
 
 
-@app.cls(
+@app.function(
     image=image,
-    gpu="A10G",
+    gpu=GPU,
     volumes={"/data": volume, "/models": models_volume},
     secrets=[modal.Secret.from_name("huggingface"), modal.Secret.from_name("wandb")],
     timeout=3600 * 24,
 )
-class Trainer:
-    @modal.method()
-    def train(self, vision: str = "moonvit", llm: str = "base", resume_run_id: str | None = None):
-        import sys
-        sys.path.insert(0, "/root/project")
+def train(vision: str = "moonvit", llm: str = "base", resume_run_id: str | None = None):
+    import sys
+    sys.path.insert(0, "/root/project")
 
-        from hydra import compose, initialize_config_dir
-        from pipeline.train_alignment import run
+    from hydra import compose, initialize_config_dir
+    from pipeline.train_alignment import run
 
-        overrides = [f"vision={vision}", f"llm={llm}"]
-        if resume_run_id:
-            overrides.append(f"resume={resume_run_id}")
+    overrides = [f"vision={vision}", f"llm={llm}"]
+    if resume_run_id:
+        overrides.append(f"resume={resume_run_id}")
 
-        with initialize_config_dir(config_dir="/root/project/config", version_base="1.3"):
-            cfg = compose(config_name="config", overrides=overrides)
-            run(cfg)
+    with initialize_config_dir(config_dir="/root/project/config", version_base="1.3"):
+        cfg = compose(config_name="config", overrides=overrides)
+        run(cfg)
 
 
 @app.local_entrypoint()
-def main(vision: str = "moonvit", llm: str = "base", resume_run_id: str = None, gpu: str = "A100"):
-    Trainer.with_options(gpu=gpu)().train.remote(vision=vision, llm=llm, resume_run_id=resume_run_id)
+def main(vision: str = "moonvit", llm: str = "base", resume_run_id: str = None):
+    train.remote(vision=vision, llm=llm, resume_run_id=resume_run_id)
