@@ -3,12 +3,18 @@ Run alignment training on Modal.
 
 Usage:
     modal run --detach scripts/modal_train_alignment.py
-    modal run --detach scripts/modal_train_alignment.py --vision siglip --gpu A10G
-    modal run --detach scripts/modal_train_alignment.py --vision moonvit --gpu A100
+    modal run --detach scripts/modal_train_alignment.py --vision siglip
+    MODAL_GPU=A100-80GB modal run --detach scripts/modal_train_alignment.py --vision moonvit
     modal run --detach scripts/modal_train_alignment.py --resume-run-id <id>
 """
 
+import os
+
 import modal
+
+# Read GPU from MODAL_GPU env var so it can be set before the app is created.
+# Usage: MODAL_GPU=A100-80GB modal run --detach scripts/modal_train_alignment.py --vision moonvit
+GPU = os.environ.get("MODAL_GPU", "A10G")
 
 app = modal.App("tayavision-train-alignment")
 volume = modal.Volume.from_name("tayavision-data")
@@ -41,28 +47,29 @@ image = (
 )
 
 
-@app.cls(
+@app.function(
     image=image,
-    gpu="A10G",
+    gpu=GPU,
     volumes={"/data": volume, "/models": models_volume},
     secrets=[modal.Secret.from_name("huggingface"), modal.Secret.from_name("wandb")],
     timeout=3600 * 24,
 )
-def train(overrides: list[str]):
+def train(vision: str = "moonvit", llm: str = "base", resume_run_id: str | None = None):
     import sys
     sys.path.insert(0, "/root/project")
 
-    # Pass overrides directly to the hydra CLI
-    sys.argv = ["train_alignment.py"] + overrides
+    from hydra import compose, initialize_config_dir
+    from pipeline.train_alignment import run
 
-    from pipeline.train_alignment import main
-    main()
+    overrides = [f"vision={vision}", f"llm={llm}"]
+    if resume_run_id:
+        overrides.append(f"resume={resume_run_id}")
+
+    with initialize_config_dir(config_dir="/root/project/config", version_base="1.3"):
+        cfg = compose(config_name="config", overrides=overrides)
+        run(cfg)
 
 
 @app.local_entrypoint()
-def run(*overrides: str):
-    """
-    Run the alignment training. Any extra arguments will be passed to Hydra as overrides.
-    Example: modal run scripts/modal_train_alignment.py vision=siglip training.batch_size=16 resume=YOUR_UUID
-    """
-    train.remote(list(overrides))
+def main(vision: str = "moonvit", llm: str = "base", resume_run_id: str = None):
+    train.remote(vision=vision, llm=llm, resume_run_id=resume_run_id)

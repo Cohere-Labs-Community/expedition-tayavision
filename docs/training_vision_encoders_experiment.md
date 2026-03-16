@@ -72,7 +72,7 @@ Key concepts:
 - **`modal.Volume`** — persistent disk attached to your function (survives across runs)
 - **`modal.Secret`** — securely injects env vars like `HF_TOKEN` and `WANDB_API_KEY`
 - **`--detach`** — runs the job in the background so you can close your terminal
-- **GPU selection** — pass `--gpu A10G` or `--gpu A100` to the training script
+- **GPU selection** — set via the `MODAL_GPU` env var (e.g. `MODAL_GPU=A100-80GB`). Defaults to `A10G`
 
 ---
 
@@ -113,16 +113,16 @@ This downloads the 558k conversation JSON and ~13GB of images directly onto the 
 
 ### Step 3: Run Alignment Training
 
-Train with **SigLIP** on an A10G:
+Train with **SigLIP** (default A10G):
 
 ```bash
-modal run --detach scripts/modal_train_alignment.py --vision siglip --gpu A10G
+modal run --detach scripts/modal_train_alignment.py --vision siglip
 ```
 
-Train with **MoonViT** on an A100:
+Train with **MoonViT** on an A100-80GB:
 
 ```bash
-modal run --detach scripts/modal_train_alignment.py --vision moonvit --gpu A100
+MODAL_GPU=A100-80GB modal run --detach scripts/modal_train_alignment.py --vision moonvit
 ```
 
 Available flags:
@@ -131,8 +131,14 @@ Available flags:
 |------|---------|-------------|
 | `--vision` | `moonvit` | Vision encoder: `siglip` or `moonvit` |
 | `--llm` | `base` | LLM variant: `base` or `global` |
-| `--gpu` | `A100` | GPU type: `A10G`, `A100`, `H100`, etc. |
 | `--resume-run-id` | `None` | Resume from a previous run's checkpoint |
+
+To change the GPU, set the `MODAL_GPU` env var (defaults to `A10G`):
+
+```bash
+MODAL_GPU=A100-80GB modal run --detach scripts/modal_train_alignment.py --vision moonvit
+MODAL_GPU=H100   modal run --detach scripts/modal_train_alignment.py --vision siglip
+```
 
 Resume a previous run:
 
