@@ -106,8 +106,8 @@ def train(
     print("Training complete")
 
 
-@hydra.main(version_base="1.3", config_path="../config", config_name="config")
-def main(cfg: DictConfig):
+def run(cfg: DictConfig):
+    """Core training logic. Can be called directly with a composed DictConfig."""
     # 1. Translate omegaconf nodes back to plain dictionaries
     training_dict = OmegaConf.to_container(cfg.training, resolve=True)
     
@@ -256,6 +256,12 @@ def main(cfg: DictConfig):
     )
 
     wandb.finish()
+
+
+@hydra.main(version_base="1.3", config_path="../config", config_name="config")
+def main(cfg: DictConfig):
+    run(cfg)
+
 
 if __name__ == "__main__":
     main()

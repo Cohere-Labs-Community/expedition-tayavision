@@ -5,8 +5,6 @@ Usage: modal run scripts/modal_pytest.py
 """
 
 import modal
-import subprocess
-import sys
 
 app = modal.App("tayavision-pytest")
 
@@ -16,7 +14,6 @@ image = (
         "torch==2.9.1",
         "torchvision",
         "transformers==4.56.2",
-        "datasets",
         "accelerate",
         "huggingface_hub",
         "tokenizers",
@@ -29,6 +26,7 @@ image = (
         "pytest",
         "hydra-core",
         "omegaconf",
+        "pyyaml",
     )
     .add_local_dir("config", remote_path="/root/project/config")
     .add_local_dir("src", remote_path="/root/project/src")
@@ -45,7 +43,8 @@ image = (
     timeout=3600,
 )
 def run_tests():
-    # Run pytest directly from the project root
+    import subprocess
+    import sys
     result = subprocess.run(
         ["pytest", "-v", "tests/test_vision_encoder.py"],
         cwd="/root/project",

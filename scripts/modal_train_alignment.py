@@ -1,7 +1,11 @@
 """
-Run alignment training on Modal with an A10 GPU.
+Run alignment training on Modal.
 
-Usage: modal run scripts/modal_train_alignment.py
+Usage:
+    modal run --detach scripts/modal_train_alignment.py
+    modal run --detach scripts/modal_train_alignment.py --vision siglip --gpu A10G
+    modal run --detach scripts/modal_train_alignment.py --vision moonvit --gpu A100
+    modal run --detach scripts/modal_train_alignment.py --resume-run-id <id>
 """
 
 import modal
@@ -16,7 +20,6 @@ image = (
         "torch==2.9.1",
         "torchvision",
         "transformers==4.56.2",
-        "datasets",
         "accelerate",
         "huggingface_hub",
         "tokenizers",
@@ -29,6 +32,7 @@ image = (
         "wandb",
         "hydra-core",
         "omegaconf",
+        "pyyaml",
     )
     .add_local_dir("config", remote_path="/root/project/config")
     .add_local_dir("src", remote_path="/root/project/src")
@@ -46,27 +50,22 @@ image = (
 )
 class Trainer:
     @modal.method()
-    def train(self, resume_run_id: str | None = None, config_json: str | None = None):
-        import json
+    def train(self, vision: str = "moonvit", llm: str = "base", resume_run_id: str | None = None):
         import sys
         sys.path.insert(0, "/root/project")
 
-        from config.training_config import AlignmentConfig
-        from config.model_config import TinyAyaVisionConfig
-        from pipeline.train_alignment import main
+        from hydra import compose, initialize_config_dir
+        from pipeline.train_alignment import run
 
-        overrides = json.loads(config_json) if config_json else {}
-        main(
-            training_config=AlignmentConfig(**overrides),
-            model_config=TinyAyaVisionConfig(),
-            resume_run_id=resume_run_id,
-        )
+        overrides = [f"vision={vision}", f"llm={llm}"]
+        if resume_run_id:
+            overrides.append(f"resume={resume_run_id}")
+
+        with initialize_config_dir(config_dir="/root/project/config", version_base="1.3"):
+            cfg = compose(config_name="config", overrides=overrides)
+            run(cfg)
 
 
 @app.local_entrypoint()
-def run(resume_run_id: str = None, config: str = None, gpu: str = "A100"):
-    config_json = None
-    if config:
-        with open(config) as f:
-            config_json = f.read()
-    Trainer.with_options(gpu=gpu)().train.remote(resume_run_id=resume_run_id, config_json=config_json)
+def main(vision: str = "moonvit", llm: str = "base", resume_run_id: str = None, gpu: str = "A100"):
+    Trainer.with_options(gpu=gpu)().train.remote(vision=vision, llm=llm, resume_run_id=resume_run_id)
