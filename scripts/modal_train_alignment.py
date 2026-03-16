@@ -1,7 +1,11 @@
 """
-Run alignment training on Modal with an A10 GPU.
+Run alignment training on Modal.
 
-Usage: modal run scripts/modal_train_alignment.py
+Usage:
+    modal run --detach scripts/modal_train_alignment.py
+    modal run --detach scripts/modal_train_alignment.py --vision siglip --gpu A10G
+    modal run --detach scripts/modal_train_alignment.py --vision moonvit --gpu A100
+    modal run --detach scripts/modal_train_alignment.py --resume-run-id <id>
 """
 
 import modal
@@ -16,7 +20,6 @@ image = (
         "torch==2.9.1",
         "torchvision",
         "transformers==4.56.2",
-        "datasets",
         "accelerate",
         "huggingface_hub",
         "tokenizers",
@@ -29,6 +32,7 @@ image = (
         "wandb",
         "hydra-core",
         "omegaconf",
+        "pyyaml",
     )
     .add_local_dir("config", remote_path="/root/project/config")
     .add_local_dir("src", remote_path="/root/project/src")
