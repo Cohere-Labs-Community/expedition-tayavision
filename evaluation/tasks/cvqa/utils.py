@@ -48,3 +48,14 @@ def cvqa_process_results(doc, results):
         pred = pred[0]
 
     return {"exact_match": float(pred == gold)}
+
+
+# CVQA blind baseline utils
+def cvqa_blind_doc_to_text(doc):
+    return f"Question: {doc['Question']}\nAnswer:"
+
+def cvqa_blind_doc_to_choice(doc):
+    return [f" {opt}" for opt in doc["Options"]]
+
+def cvqa_blind_doc_to_target(doc):
+    return doc["Label"]

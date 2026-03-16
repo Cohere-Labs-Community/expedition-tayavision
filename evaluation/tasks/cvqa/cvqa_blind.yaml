@@ -1,0 +1,17 @@
+task: cvqa_blind
+dataset_path: afaji/cvqa
+dataset_name: null
+test_split: test
+output_type: multiple_choice
+# doc_to_image: !function utils.cvqa_doc_to_image (omitted for blind)
+dataset_kwargs:
+  trust_remote_code: true
+doc_to_text: !function utils.cvqa_blind_doc_to_text
+doc_to_target: !function utils.cvqa_blind_doc_to_target
+doc_to_choice: !function utils.cvqa_blind_doc_to_choice
+metric_list:
+  - metric: acc
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0
