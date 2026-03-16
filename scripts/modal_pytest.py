@@ -13,9 +13,9 @@ app = modal.App("tayavision-pytest")
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(
-        "torch",
+        "torch==2.9.1",
         "torchvision",
-        "transformers",
+        "transformers==4.56.2",
         "datasets",
         "accelerate",
         "huggingface_hub",
