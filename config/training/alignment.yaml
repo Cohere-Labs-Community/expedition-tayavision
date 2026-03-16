@@ -1,5 +1,5 @@
 dataset_name: "liuhaotian/LLaVA-Pretrain"
-data_dir: "data/llava-pretrain"
+data_dir: "/data/llava-pretrain"
 max_seq_len: 2048
 
 num_epochs: 1
@@ -14,7 +14,7 @@ num_workers: 4
 
 torch_dtype: "bfloat16"
 
-models_dir: "models"
+models_dir: "/models"
 save_steps: 500
 logging_steps: 10
 seed: 42
