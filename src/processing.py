@@ -54,8 +54,8 @@ class TinyAyaVisionProcessor:
                     "image_grid_hws is required for MoonViT to determine token counts. "
                     "Run the image processor first and pass image_grid_hws here."
                 )
-            # image_grid_hws: (B, 2) — [H, W] tile grid per image; total visual tokens = H * W * tokens_per_tile
-            return (image_grid_hws[:, 0] * image_grid_hws[:, 1] * self.config.tokens_per_tile).tolist()
+            # image_grid_hws: (B, 2) — [H, W] grid per image; H * W = total visual tokens
+            return (image_grid_hws[:, 0] * image_grid_hws[:, 1]).tolist()
         else:
             return [self.config.num_tokens_after_shuffle] * n_images
 

@@ -83,10 +83,12 @@ def train(
                 ce_loss = outputs.loss / training_config.grad_acc_steps
 
                 token_embeddings = model.language_model.get_input_embeddings().weight # (vocab size, D)
-                image_hidden_states = outputs.image_hidden_states # (B, V, D)
+                image_hidden_states = outputs.image_hidden_states # (B, V, D) or (total_tokens, D)
 
-                align_reg_loss = (token_embeddings.mean(dim=0) - image_hidden_states.mean(dim=(0, 1))).square().sum() \
-                                + (token_embeddings.std(dim=0) - image_hidden_states.std(dim=(0, 1))).square().sum()
+                # Flatten to 2-D for both SigLIP (B, V, D) and MoonViT (total_tokens, D)
+                ihs = image_hidden_states.reshape(-1, image_hidden_states.shape[-1])
+                align_reg_loss = (token_embeddings.mean(dim=0) - ihs.mean(dim=0)).square().sum() \
+                                + (token_embeddings.std(dim=0) - ihs.std(dim=0)).square().sum()
                 align_reg_loss /= training_config.grad_acc_steps
                 
             loss = ce_loss + training_config.embed_align_reg * align_reg_loss
