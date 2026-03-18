@@ -217,7 +217,7 @@ class TinyAyaVisionForConditionalGeneration(nn.Module, GenerationMixin):
             past_key_values=outputs.past_key_values,
             hidden_states=getattr(outputs, "hidden_states", None),
             attentions=getattr(outputs, "attentions", None),
-            image_hidden_states=image_features if not isinstance(image_features, list) else None,
+            image_hidden_states=torch.cat(image_features, dim=0) if isinstance(image_features, list) else image_features,
         )
 
     def prepare_inputs_for_generation(
