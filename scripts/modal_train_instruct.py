@@ -21,6 +21,7 @@ models_volume = modal.Volume.from_name("tayavision-models", create_if_missing=Tr
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
+    .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
     .uv_pip_install(
         "torch==2.9.1",
         "torchvision",
