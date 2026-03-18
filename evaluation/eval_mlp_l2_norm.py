@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 
-from config.model_config import TinyAyaVisionConfig
 from evaluation.utils import load_imagenette_images, load_model
 
 
@@ -9,8 +8,7 @@ def main(num_per_class=1):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}\n")
 
-    model_config = TinyAyaVisionConfig.for_global()
-    model, processor = load_model(model_config, device)
+    model, processor = load_model(device)
     images = load_imagenette_images(num_per_class=num_per_class)
     labels = [label for label, _ in images]
 

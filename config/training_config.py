@@ -17,6 +17,7 @@ class AlignmentConfig:
     weight_decay: float = 0.0
     lr_scheduler_type: str = "cosine"
     max_grad_norm: float = 1.0
+    embed_align_reg: float = 0.0
     num_workers: int = 4
 
     torch_dtype: str = "bfloat16"

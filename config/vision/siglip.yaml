@@ -1,0 +1,13 @@
+vision_encoder_type: siglip
+vision_model_name: google/siglip2-so400m-patch14-384
+vision_hidden_size: 1152
+image_size: 384
+patch_size: 14
+vision_grid_size: 27        # 384 // 14
+num_vision_tokens: 729      # 27 * 27
+connector_type: pixel_shuffle
+downsample_factor: 2
+padded_grid_size: 28        # ceil_to_even(27)
+num_tokens_after_shuffle: 196  # (28 // 2) ** 2
+pixel_shuffle_embed_dim: 4608  # 1152 * 2**2
+trust_remote_code: false
