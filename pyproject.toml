@@ -8,7 +8,6 @@ dependencies = [
     # Core ML framework
     "torch>=2.2.0",
     "torchvision>=0.17.0",
-
     # HuggingFace ecosystem
     "transformers>=4.49.0",
     "datasets>=3.0.0",
@@ -16,40 +15,30 @@ dependencies = [
     "huggingface_hub>=0.27.0",
     "tokenizers>=0.21.0",
     "trl>=0.12.0",
-
     # Tokenizer / serialization
     "sentencepiece>=0.2.0",
     "protobuf>=4.25.0",
-
     # Image processing
     "Pillow>=10.0.0",
-
     # Numerical / utilities
     "numpy>=1.26.0",
     "tqdm>=4.66.0",
     "einops>=0.8.0",
     "requests>=2.32.0",
-
     # Config management (hydra-zen replaces unmaintained hydra-core)
     "hydra-zen>=0.12.0",
     "omegaconf>=2.3.0",
-
     # Experiment tracking
     "wandb>=0.16.0",
     "weave>=0.51.12",
-
     # PEFT / LoRA
     "peft>=0.13.0",
-
     # Evaluation
     "lm-eval>=0.4.0",
-
     # Quantization
     "bitsandbytes>=0.43.0",
-
     # Fast fine-tuning
     "unsloth>=2024.10.0",
-
     # Environment
     "python-dotenv>=1.0.1",
 ]

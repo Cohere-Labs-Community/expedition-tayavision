@@ -1,0 +1,21 @@
+dataset_name: "liuhaotian/LLaVA-Pretrain"
+data_dir: "/data/llava-pretrain"
+max_seq_len: 2048
+
+num_epochs: 1
+batch_size: 8
+grad_acc_steps: 32
+warmup_ratio: 0.03
+learning_rate: 1.0e-3
+weight_decay: 0.0
+lr_scheduler_type: "cosine"
+max_grad_norm: 1.0
+num_workers: 4
+
+torch_dtype: "bfloat16"
+
+models_dir: "/models"
+save_steps: 500
+logging_steps: 10
+seed: 42
+

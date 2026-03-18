@@ -1,10 +1,20 @@
 """
-Run alignment training on Modal with an A10 GPU.
+Run alignment training on Modal.
 
-Usage: modal run scripts/modal_train_alignment.py
+Usage:
+    modal run --detach scripts/modal_train_alignment.py
+    modal run --detach scripts/modal_train_alignment.py --vision siglip
+    MODAL_GPU=A100-80GB modal run --detach scripts/modal_train_alignment.py --vision moonvit
+    modal run --detach scripts/modal_train_alignment.py --resume-run-id <id>
 """
 
+import os
+
 import modal
+
+# Read GPU from MODAL_GPU env var so it can be set before the app is created.
+# Usage: MODAL_GPU=A100-80GB modal run --detach scripts/modal_train_alignment.py --vision moonvit
+GPU = os.environ.get("MODAL_GPU", "A10G")
 
 app = modal.App("tayavision-train-alignment")
 volume = modal.Volume.from_name("tayavision-data")
@@ -12,11 +22,10 @@ models_volume = modal.Volume.from_name("tayavision-models", create_if_missing=Tr
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install(
-        "torch",
+    .uv_pip_install(
+        "torch==2.9.1",
         "torchvision",
-        "transformers",
-        "datasets",
+        "transformers==4.56.2",
         "accelerate",
         "huggingface_hub",
         "tokenizers",
@@ -27,6 +36,9 @@ image = (
         "tqdm",
         "einops",
         "wandb",
+        "hydra-core",
+        "omegaconf",
+        "pyyaml",
     )
     .add_local_dir("config", remote_path="/root/project/config")
     .add_local_dir("src", remote_path="/root/project/src")
@@ -35,36 +47,29 @@ image = (
 )
 
 
-@app.cls(
+@app.function(
     image=image,
-    gpu="A10G",
+    gpu=GPU,
     volumes={"/data": volume, "/models": models_volume},
     secrets=[modal.Secret.from_name("huggingface"), modal.Secret.from_name("wandb")],
     timeout=3600 * 24,
 )
-class Trainer:
-    @modal.method()
-    def train(self, resume_run_id: str | None = None, config_json: str | None = None):
-        import json
-        import sys
-        sys.path.insert(0, "/root/project")
+def train(vision: str = "moonvit", llm: str = "base", resume_run_id: str | None = None):
+    import sys
+    sys.path.insert(0, "/root/project")
 
-        from config.training_config import AlignmentConfig
-        from config.model_config import TinyAyaVisionConfig
-        from pipeline.train_alignment import main
+    from hydra import compose, initialize_config_dir
+    from pipeline.train_alignment import run
 
-        overrides = json.loads(config_json) if config_json else {}
-        main(
-            training_config=AlignmentConfig(**overrides),
-            model_config=TinyAyaVisionConfig(),
-            resume_run_id=resume_run_id,
-        )
+    overrides = [f"vision={vision}", f"llm={llm}"]
+    if resume_run_id:
+        overrides.append(f"resume={resume_run_id}")
+
+    with initialize_config_dir(config_dir="/root/project/config", version_base="1.3"):
+        cfg = compose(config_name="config", overrides=overrides)
+        run(cfg)
 
 
 @app.local_entrypoint()
-def run(resume_run_id: str = None, config: str = None, gpu: str = "A100"):
-    config_json = None
-    if config:
-        with open(config) as f:
-            config_json = f.read()
-    Trainer.with_options(gpu=gpu)().train.remote(resume_run_id=resume_run_id, config_json=config_json)
+def main(vision: str = "moonvit", llm: str = "base", resume_run_id: str = None):
+    train.remote(vision=vision, llm=llm, resume_run_id=resume_run_id)

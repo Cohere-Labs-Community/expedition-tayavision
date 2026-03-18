@@ -1,4 +1,5 @@
 import io
+import json
 import tarfile
 import tempfile
 import urllib.request
@@ -53,13 +54,21 @@ def load_imagenette_images(num_per_class: int = 1) -> list[tuple[str, Image.Imag
         return result
 
 
-def load_model(model_config: TinyAyaVisionConfig, device: torch.device):
+def load_model_config_from_hub(repo: str = HF_REPO) -> TinyAyaVisionConfig:
+    config_path = hf_hub_download(repo, "config.json")
+    with open(config_path) as f:
+        data = json.load(f)
+    return TinyAyaVisionConfig(**data["model_config"])
+
+
+def load_model(device: torch.device, repo: str = HF_REPO):
+    model_config = load_model_config_from_hub(repo)
     processor = TinyAyaVisionProcessor(config=model_config)
     model = TinyAyaVisionForConditionalGeneration(config=model_config)
     model.setup_tokenizer(processor.tokenizer)
     model.to(device)
 
-    connector_path = hf_hub_download(HF_REPO, "connector.pt")
+    connector_path = hf_hub_download(repo, "connector.pt")
     state_dict = torch.load(connector_path, map_location=device)
     model.multi_modal_projector.load_state_dict(state_dict)
     model.eval()

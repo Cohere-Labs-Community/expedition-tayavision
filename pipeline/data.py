@@ -33,32 +33,52 @@ class AlignmentDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         image_path = self.data_dir / item["image"]
-        image = Image.open(image_path)
+        image = Image.open(image_path).convert("RGB")
 
         prompt = item["conversations"][0]["value"]
         response = item["conversations"][1]["value"]
 
+        tokenizer = self.processor.tokenizer
+        if tokenizer.chat_template is not None:
+            full_text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}, {"role": "assistant", "content": response}],
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            prompt_text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        else:
+            full_text = prompt + response
+            prompt_text = prompt
+
         processed = self.processor(
             images=image,
-            text=prompt + response,
+            text=full_text,
         )
         input_ids = processed["input_ids"].squeeze(0)
         attention_mask = processed["attention_mask"].squeeze(0)
         pixel_values = processed["pixel_values"].squeeze(0)
 
         processed_prompt = self.processor(
-            text=prompt,
+            text=prompt_text,
+            image_grid_hws=processed.get("image_grid_hws"),
         )
         num_prompt_tokens = processed_prompt["input_ids"].shape[-1]
         labels = input_ids.clone()
         labels[:num_prompt_tokens] = -100
         
-        return {
+        result = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "pixel_values": pixel_values,
             "labels": labels,
         }
+        if "image_grid_hws" in processed:
+            result["image_grid_hws"] = processed["image_grid_hws"].squeeze(0)
+        return result
 
 class InstructDataset(torch.utils.data.Dataset):
     """Dataset for instruction-finetuning with LLaVA-Instruct-150K.
@@ -194,7 +214,12 @@ def collate_fn(
         batch_first=True,
         padding_value=0,
     )
-    pixel_values = torch.stack([item["pixel_values"] for item in batch])
+    # MoonViT: variable tile counts per image → concatenate along dim 0.
+    # SigLIP: fixed-size tensors → stack into a batch.
+    if "image_grid_hws" in batch[0]:
+        pixel_values = torch.cat([item["pixel_values"] for item in batch], dim=0)
+    else:
+        pixel_values = torch.stack([item["pixel_values"] for item in batch])
 
     labels = torch.nn.utils.rnn.pad_sequence(
         [item["labels"] for item in batch],
@@ -202,11 +227,14 @@ def collate_fn(
         padding_value=-100,
     )
 
-    return {
+    result = {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "pixel_values": pixel_values,
         "labels": labels,
     }
+    if "image_grid_hws" in batch[0]:
+        result["image_grid_hws"] = torch.stack([item["image_grid_hws"] for item in batch])
+    return result
 
     
