@@ -53,12 +53,14 @@ def train(
     checkpoint_dir: Path,
     compute_dtype: torch.dtype,
     projector_output_norms: list,
+    image_token_id: int,
     step_offset: int = 0,
 ):
     model.train()
     accumulated_loss = 0.0
     accumulated_ce_loss = 0.0
     accumulated_align_reg_loss = 0.0
+    max_image_tokens_in_window = 0
 
     for epoch in range(training_config.num_epochs):
         for step, batch in enumerate(dataloader, start=step_offset):
@@ -71,6 +73,11 @@ def train(
             image_grid_hws = batch.get("image_grid_hws")
             if image_grid_hws is not None:
                 image_grid_hws = image_grid_hws.to(device)
+
+            max_image_tokens_in_window = max(
+                max_image_tokens_in_window,
+                (input_ids == image_token_id).sum(dim=1).max().item(),
+            )
 
             with torch.autocast("cuda", dtype=compute_dtype):
                 outputs = model(
@@ -117,6 +124,7 @@ def train(
                     "train/lr": lr_scheduler.get_last_lr()[0],
                     "train/projector_output_norm": avg_projector_norm,
                     "train/projector_output_norm_std": avg_projector_norm_std,
+                    "train/max_image_tokens": max_image_tokens_in_window,
                 }, step=opt_step)
 
                 if opt_step % training_config.logging_steps == 0:
@@ -128,6 +136,7 @@ def train(
                 accumulated_loss = 0.0
                 accumulated_ce_loss = 0.0
                 accumulated_align_reg_loss = 0.0
+                max_image_tokens_in_window = 0
 
     save_checkpoint(checkpoint_dir, step + 1, model, optimizer, lr_scheduler)
     print("Training complete")
@@ -286,6 +295,7 @@ def run(cfg: DictConfig):
         checkpoint_dir=checkpoint_dir,
         compute_dtype=compute_dtype,
         projector_output_norms=projector_output_norms,
+        image_token_id=processor.image_token_id,
         step_offset=resume_step,
     )
 

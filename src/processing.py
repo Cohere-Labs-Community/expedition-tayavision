@@ -59,10 +59,14 @@ class TinyAyaVisionProcessor:
 
     def __init__(self, config: TinyAyaVisionConfig):
         self.config = config
+        image_processor_kwargs = {}
+        if config.vision_encoder_type == "moonvit":
+            image_processor_kwargs["in_token_limit"] = config.in_token_limit
         self.image_processor = AutoImageProcessor.from_pretrained(
             config.vision_model_name,
             cache_dir=config.cache_dir,
             trust_remote_code=config.trust_remote_code,
+            **image_processor_kwargs,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(config.llm_model_name, cache_dir=config.cache_dir)
 

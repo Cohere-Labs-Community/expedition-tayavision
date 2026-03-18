@@ -188,11 +188,13 @@ def train(
     checkpoint_dir: Path,
     compute_dtype: torch.dtype,
     device: torch.device,
+    image_token_id: int,
     processor: TinyAyaVisionProcessor | None = None,
     step_offset: int = 0,
 ):
     model.train()
     accumulated_loss = 0.0
+    max_image_tokens_in_window = 0
     use_ddp = dist.is_initialized()
     is_main = (not use_ddp) or dist.get_rank() == 0
 
@@ -223,6 +225,11 @@ def train(
                 batch["attention_mask"].to(device, non_blocking=True),
                 batch["pixel_values"].to(device, non_blocking=True),
                 batch["labels"].to(device, non_blocking=True),
+            )
+
+            max_image_tokens_in_window = max(
+                max_image_tokens_in_window,
+                (input_ids == image_token_id).sum(dim=1).max().item(),
             )
 
             with torch.autocast("cuda", dtype=compute_dtype):
@@ -269,6 +276,7 @@ def train(
                         "train/lr": lr_scheduler.get_last_lr()[0],
                         "train/response_tokens": num_response_tokens,
                         "train/masked_pct": masked_pct,
+                        "train/max_image_tokens": max_image_tokens_in_window,
                     }
 
                     if "projector_token" in norm_cache:
@@ -312,6 +320,7 @@ def train(
                     dist.barrier()
 
                 accumulated_loss = 0.0
+                max_image_tokens_in_window = 0
 
     hook_handle.remove()
     if is_main:
@@ -516,6 +525,7 @@ def main(
         checkpoint_dir=checkpoint_dir,
         compute_dtype=compute_dtype,
         device=device,
+        image_token_id=processor.image_token_id,
         processor=processor,
         step_offset=resume_step,
     )

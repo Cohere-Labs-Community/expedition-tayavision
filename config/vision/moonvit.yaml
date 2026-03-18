@@ -6,3 +6,4 @@ tokens_per_tile: 4           # MoonViT outputs 4 sub-tokens per tile
 trust_remote_code: true
 # num_tokens_after_shuffle is not used for moonvit (token count is dynamic)
 num_tokens_after_shuffle: -1
+in_token_limit: 1024         # max patches fed to encoder; caps visual tokens at 1024/image

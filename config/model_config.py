@@ -34,6 +34,8 @@ class TinyAyaVisionConfig:
 
     # MoonViT — tokens per tile (output structure: list of (N_tiles, tokens_per_tile, D))
     tokens_per_tile: int = 4
+    # MoonViT — max patches fed to the encoder (caps visual tokens per image)
+    in_token_limit: int = 1024
 
     # Vision-language connector (2-layer MLP with SwiGLU)
     connector_intermediate_size: int = 2048  # matches LLM hidden_size
