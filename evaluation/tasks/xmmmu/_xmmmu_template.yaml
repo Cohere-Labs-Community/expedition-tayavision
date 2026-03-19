@@ -1,0 +1,19 @@
+dataset_path: neulab/PangeaBench-xmmmu
+dataset_name: null
+output_type: generate_until
+doc_to_image: !function utils.xmmmu_doc_to_image
+doc_to_text: !function utils.xmmmu_doc_to_text
+doc_to_target: "answer"
+process_results: !function utils.xmmmu_process_results
+generation_kwargs:
+  until:
+    - "\n"
+  temperature: 0.0
+  do_sample: false
+  max_gen_toks: 16
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

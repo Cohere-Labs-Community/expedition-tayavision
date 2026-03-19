@@ -1,0 +1,9 @@
+group: xmmmu_blind
+task:
+  - xmmmu_blind_ar
+  - xmmmu_blind_en
+  - xmmmu_blind_fr
+  - xmmmu_blind_hi
+  - xmmmu_blind_id
+  - xmmmu_blind_ja
+  - xmmmu_blind_pt

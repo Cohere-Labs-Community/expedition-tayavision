@@ -122,16 +122,92 @@ class TestXMMMUTask:
         doc = {
             "question": "<image 1> What is shown?",
             "options": "['A thing', 'B thing', 'C thing', 'D thing']",
+            "question_type": "multiple-choice",
         }
         text = xmmmu_doc_to_text(doc)
         assert "<image 1>" not in text
         assert "<image>" in text
+        assert "A." in text
 
-    def test_process_results_correct(self):
-        """Correct answer scores 1.0."""
+    def test_doc_to_text_open_ended(self):
+        """Open-ended questions use a different prompt."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_doc_to_text
+
+        doc = {
+            "question": "<image 1> Compute the value.",
+            "options": "[]",
+            "question_type": "open",
+        }
+        text = xmmmu_doc_to_text(doc)
+        assert "single word or phrase" in text
+        assert "A." not in text
+
+    def test_process_results_mcq_correct(self):
+        """Correct MCQ answer scores 1.0."""
         from evaluation.tasks.xmmmu.utils import xmmmu_process_results
 
-        doc = {"answer": "B"}
+        doc = {
+            "answer": "B",
+            "question_type": "multiple-choice",
+            "options": "['opt1', 'opt2', 'opt3', 'opt4']",
+        }
         results = ["B"]
         score = xmmmu_process_results(doc, results)
         assert score["exact_match"] == 1.0
+
+    def test_process_results_open_numeric(self):
+        """Open-ended numeric answer scores correctly."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_process_results
+
+        doc = {"answer": "1.06", "question_type": "open", "options": "[]"}
+        results = ["1.06"]
+        assert xmmmu_process_results(doc, results)["exact_match"] == 1.0
+
+        results_wrong = ["2.5"]
+        assert xmmmu_process_results(doc, results_wrong)["exact_match"] == 0.0
+
+    def test_process_results_open_string(self):
+        """Open-ended string answer with substring match."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_process_results
+
+        doc = {"answer": "embryonic", "question_type": "open", "options": "[]"}
+        results = ["The answer is embryonic"]
+        assert xmmmu_process_results(doc, results)["exact_match"] == 1.0
+
+
+class TestXMMMUBlindTask:
+    """Tests for the xMMMU blind baseline task."""
+
+    def test_utils_import(self):
+        """xMMMU blind utils import without errors."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_blind_doc_to_text
+
+        assert callable(xmmmu_blind_doc_to_text)
+
+    def test_doc_to_text_strips_image_markers_mcq(self):
+        """Image markers are removed for MCQ, options formatted."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_blind_doc_to_text
+
+        doc = {
+            "question": "<image 1> What is shown in <image 2>?",
+            "options": "['Red', 'Blue', 'Green', 'Yellow']",
+            "question_type": "multiple-choice",
+        }
+        text = xmmmu_blind_doc_to_text(doc)
+        assert "<image" not in text
+        assert "What is shown in" in text
+        assert "A." in text
+        assert "Blue" in text
+
+    def test_doc_to_text_open_ended(self):
+        """Open-ended samples get the correct prompt."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_blind_doc_to_text
+
+        doc = {
+            "question": "What is 2+2?",
+            "options": "[]",
+            "question_type": "open",
+        }
+        text = xmmmu_blind_doc_to_text(doc)
+        assert "What is 2+2?" in text
+        assert "single word or phrase" in text

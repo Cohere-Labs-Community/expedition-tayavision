@@ -1,0 +1,3 @@
+task: xmmmu_id
+include: _xmmmu_template.yaml
+test_split: id

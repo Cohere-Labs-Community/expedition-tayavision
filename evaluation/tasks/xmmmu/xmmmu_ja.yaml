@@ -1,0 +1,3 @@
+task: xmmmu_ja
+include: _xmmmu_template.yaml
+test_split: ja

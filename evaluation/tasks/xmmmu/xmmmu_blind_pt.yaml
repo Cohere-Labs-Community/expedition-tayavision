@@ -1,0 +1,3 @@
+task: xmmmu_blind_pt
+include: _xmmmu_blind_template.yaml
+test_split: pt
