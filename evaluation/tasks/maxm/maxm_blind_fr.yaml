@@ -1,0 +1,3 @@
+task: maxm_blind_fr
+include: _maxm_blind_template.yaml
+test_split: fr

@@ -1,0 +1,11 @@
+group: mtvqa_blind
+task:
+  - mtvqa_blind_ar
+  - mtvqa_blind_de
+  - mtvqa_blind_fr
+  - mtvqa_blind_it
+  - mtvqa_blind_ja
+  - mtvqa_blind_kr
+  - mtvqa_blind_ru
+  - mtvqa_blind_th
+  - mtvqa_blind_vi

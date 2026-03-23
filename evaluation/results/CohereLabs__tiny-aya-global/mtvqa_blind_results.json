@@ -1,0 +1,41 @@
+{
+  "mtvqa_blind": {
+    "exact_match,none": 0.0
+  },
+  "mtvqa_blind_ar": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "mtvqa_blind_de": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "mtvqa_blind_fr": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "mtvqa_blind_it": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "mtvqa_blind_ja": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "mtvqa_blind_kr": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "mtvqa_blind_ru": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "mtvqa_blind_th": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "mtvqa_blind_vi": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  }
+}

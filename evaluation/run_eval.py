@@ -44,6 +44,7 @@ def main():
         import models  # noqa: F401 — triggers Auto class registration
 
     import lm_eval
+    import lm_eval.tasks
 
     model_args = f"pretrained={args.model_name},dtype={args.dtype},trust_remote_code={args.trust_remote_code}"
     if args.backend == "vllm":
@@ -72,11 +73,44 @@ def main():
     if args.output_dir:
         import json
         from pathlib import Path
-        output_path = Path(args.output_dir)
+
+        # Store results under output_dir/model_name/
+        model_name_sanitized = args.model_name.replace("/", "__")
+        output_path = Path(args.output_dir) / model_name_sanitized
         output_path.mkdir(parents=True, exist_ok=True)
+
+        task_results = results.get("results", {})
+
+        # Compute aggregate score for the group across sub-tasks
+        group_name = args.task
+        if group_name in task_results:
+            subtask_scores = {}
+            for key, metrics in task_results.items():
+                if key == group_name:
+                    continue
+                for metric_name, value in metrics.items():
+                    if "stderr" in metric_name or not isinstance(value, (int, float)):
+                        continue
+                    subtask_scores.setdefault(metric_name, []).append(value)
+
+            aggregated = {}
+            for metric_name, values in subtask_scores.items():
+                aggregated[metric_name] = sum(values) / len(values)
+            task_results[group_name] = aggregated
+            logger.info(f"Aggregate {group_name}: {aggregated}")
+
+        # Save aggregated results (overall + per-language)
         with open(output_path / f"{args.task}_results.json", "w") as f:
-            json.dump(results.get("results", {}), f, indent=2)
-        logger.info(f"Results saved to {output_path / f'{args.task}_results.json'}")
+            json.dump(task_results, f, indent=2, ensure_ascii=False)
+
+        # Save per-task sample-level JSONL files
+        if args.log_samples and results.get("samples"):
+            for task_name, task_samples in results["samples"].items():
+                with open(output_path / f"samples_{task_name}.jsonl", "w") as f:
+                    for sample in task_samples:
+                        f.write(json.dumps(sample, default=str, ensure_ascii=False) + "\n")
+
+        logger.info(f"Results and samples saved to {output_path}/")
 
 
 if __name__ == "__main__":
