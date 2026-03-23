@@ -27,6 +27,10 @@ def main():
     parser.add_argument("--output-dir", type=str, default="evaluation/results")
     parser.add_argument("--log-samples", action="store_true", help="Log per-question results")
     parser.add_argument("--apply-chat-template", action="store_true", help="Apply chat template")
+    parser.add_argument("--skip-registration", action="store_true", help="Skip TinyAyaVision Auto class registration (use for external baseline models)")
+    parser.add_argument("--dtype", type=str, default="bfloat16", help="Model dtype (bfloat16, float16, auto, etc.)")
+    parser.add_argument("--trust-remote-code", action="store_true", default=True, help="Pass trust_remote_code=True to model loader")
+    parser.add_argument("--no-trust-remote-code", dest="trust_remote_code", action="store_false")
     args = parser.parse_args()
 
     logger.info(f"Starting evaluation for task: {args.task}")
@@ -36,11 +40,12 @@ def main():
 
     # Register TinyAyaVision with HuggingFace Auto classes so lm-eval can
     # load it via AutoModelForCausalLM.from_pretrained / AutoConfig.
-    import models  # noqa: F401 — triggers Auto class registration
+    if not args.skip_registration:
+        import models  # noqa: F401 — triggers Auto class registration
 
     import lm_eval
 
-    model_args = f"pretrained={args.model_name},dtype=bfloat16,trust_remote_code=True"
+    model_args = f"pretrained={args.model_name},dtype={args.dtype},trust_remote_code={args.trust_remote_code}"
     if args.backend == "vllm":
         model_args += ",tensor_parallel_size=1"
 

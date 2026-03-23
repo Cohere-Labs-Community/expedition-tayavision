@@ -1,0 +1,28 @@
+tasks:
+  - cvqa_blind
+  - xmmmu
+
+models:
+  - name: google/gemma-3-4b-it
+    backend: hf-multimodal
+    dtype: bfloat16
+    trust_remote_code: false
+    apply_chat_template: true
+
+  - name: mistralai/Ministral-3-3B-Instruct-2512
+    backend: hf-multimodal
+    dtype: auto  # Instruct weights are FP8; auto loads natively (bfloat16 would dequantize and double memory)
+    trust_remote_code: false
+    apply_chat_template: true
+
+  - name: HuggingFaceTB/SmolVLM-Instruct
+    backend: hf-multimodal
+    dtype: bfloat16
+    trust_remote_code: false
+    apply_chat_template: true
+
+  - name: Qwen/Qwen3-VL-2B-Instruct
+    backend: hf-multimodal
+    dtype: bfloat16
+    trust_remote_code: true
+    apply_chat_template: true
