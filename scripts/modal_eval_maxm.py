@@ -1,13 +1,14 @@
 import os
 import sys
 import threading
-import time
-import uuid
 
 import modal
 
-app = modal.App("tayavision-eval-checkpoint")
+app = modal.App("tayavision-eval-maxm")
+
 MODEL_NAME = "TrishanuDas/tayavision-instruct-665k"
+
+SPLITS = ["en", "fr", "hi", "th", "zh", "iw", "ro"]
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -27,6 +28,7 @@ image = (
 # Persistent volume for results and checkpoints
 results_volume = modal.Volume.from_name("tayavision-results", create_if_missing=True)
 
+
 def _periodic_commit(volume: modal.Volume, stop_event: threading.Event, interval: int = 300):
     """Background thread: commit volume every `interval` seconds so checkpoints survive crashes."""
     while not stop_event.wait(timeout=interval):
@@ -34,6 +36,7 @@ def _periodic_commit(volume: modal.Volume, stop_event: threading.Event, interval
             volume.commit()
         except Exception:
             pass
+
 
 @app.function(
     image=image,
@@ -44,26 +47,22 @@ def _periodic_commit(volume: modal.Volume, stop_event: threading.Event, interval
     retries=modal.Retries(max_retries=1),
 )
 def run_evaluation(
-    task: str,
-    run_id: str,
-    batch_size: str = "2",
-    log_samples: bool = False,
+    split: str,
+    batch_size: str = "1",
     apply_chat_template: bool = True,
     limit: int = None,
 ):
     sys.path.insert(0, "/root/project")
     os.chdir("/root/project")
 
-    # Per-run directory: /results/runs/{run_id}/{task}/
-    run_dir = f"/results/runs/{run_id}/{task}"
-    os.makedirs(run_dir, exist_ok=True)
+    task = f"maxm_{split}"
+    out_dir = f"/results/maxm_{split}"
+    os.makedirs(out_dir, exist_ok=True)
 
-    # Point the backend at the checkpoint dir for resume support
-    os.environ["TAYA_CHECKPOINT_DIR"] = run_dir
+    os.environ["TAYA_CHECKPOINT_DIR"] = out_dir
 
     import evaluation.tiny_aya_vision_lm_eval  # noqa: F401 — registers tiny-aya-vision backend
 
-    # Background thread commits the volume every 5 min so checkpoints survive crashes
     stop_event = threading.Event()
     commit_thread = threading.Thread(
         target=_periodic_commit, args=(results_volume, stop_event), daemon=True
@@ -79,10 +78,8 @@ def run_evaluation(
             "--model-name", MODEL_NAME,
             "--backend", "tiny-aya-vision",
             "--batch-size", batch_size,
-            "--output-dir", run_dir,
+            "--output-dir", out_dir,
         ]
-        if log_samples:
-            sys.argv.append("--log-samples")
         if apply_chat_template:
             sys.argv.append("--apply-chat-template")
         if limit:
@@ -94,7 +91,7 @@ def run_evaluation(
 
     # Read results and return to local machine
     results_data = {}
-    for root, dirs, files in os.walk(run_dir):
+    for root, dirs, files in os.walk(out_dir):
         for filename in files:
             if filename.endswith(".json") or filename.endswith(".jsonl"):
                 abs_path = os.path.join(root, filename)
@@ -107,35 +104,30 @@ def run_evaluation(
 
 
 # Usage:
-#   modal run scripts/modal_eval_checkpoint_en.py --task cvqa
-#   modal run scripts/modal_eval_checkpoint_en.py --task cvqa_en
+#   modal run scripts/modal_eval_maxm.py --split en
+#   modal run scripts/modal_eval_maxm.py --split all     (all 7 splits in parallel)
+#   modal run scripts/modal_eval_maxm.py --split en --limit 5  (test)
 @app.local_entrypoint()
 def main(
-    task: str = "cvqa",
-    run_id: str = "",
-    batch_size: str = "2",
-    log_samples: bool = False,
+    split: str = "en",
+    batch_size: str = "1",
     apply_chat_template: bool = True,
     limit: int = None,
 ):
-    # Generate a new run ID or resume an existing one
-    if not run_id:
-        run_id = str(uuid.uuid4())[:8]
-        print(f"Starting new run: {run_id}")
+    splits = SPLITS if split == "all" else [split]
+    if split != "all":
+        print(f"Running maxm_{split}")
     else:
-        print(f"Resuming run: {run_id}")
+        print(f"Running all {len(splits)} splits in parallel")
 
-    tasks = ["cvqa", "cvqa_en"] if task == "all" else [task]
     futures = [
         run_evaluation.remote(
-            task=t,
-            run_id=run_id,
+            split=s,
             batch_size=batch_size,
-            log_samples=log_samples,
             apply_chat_template=apply_chat_template,
             limit=limit,
         )
-        for t in tasks
+        for s in splits
     ]
 
     local_base_dir = "evaluation/results"
@@ -149,5 +141,4 @@ def main(
                 f.write(content)
             print(f"Synced result: {local_path}")
 
-    print(f"\nEvaluation complete. Run ID: {run_id}")
-    print("Results stored in evaluation/results/")
+    print("\nEvaluation complete. Results stored in evaluation/results/maxm_{split}/")

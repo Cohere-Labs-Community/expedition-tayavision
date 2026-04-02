@@ -1,24 +1,9 @@
 import torch
 from PIL import Image
 from transformers import AutoImageProcessor, AutoTokenizer
+from transformers.feature_extraction_utils import BatchFeature
 
 from config.model_config import TinyAyaVisionConfig
-
-# Jinja2 snippet that replaces {{ message['content'] }} to handle both
-# plain-string content and aya-vision-style list-of-dicts content.
-# Images are rendered first, then text — matching aya-vision's ordering.
-_MULTIMODAL_CONTENT_RENDER = (
-    "{%- if message['content'] is string -%}"
-    "{{ message['content'] }}"
-    "{%- else -%}"
-    "{%- for item in message['content'] | selectattr('type', 'equalto', 'image') -%}"
-    "<image>"
-    "{%- endfor -%}"
-    "{%- for item in message['content'] | selectattr('type', 'equalto', 'text') -%}"
-    "{{ item['text'] }}"
-    "{%- endfor -%}"
-    "{%- endif -%}"
-)
 
 # Jinja2 snippet that replaces {{ message['content'] }} to handle both
 # plain-string content and aya-vision-style list-of-dicts content.
@@ -48,8 +33,6 @@ class TinyAyaVisionProcessor:
     messages (list-of-dicts with ``type: "image"`` / ``type: "text"``),
     enabling a standard instruction-finetuning workflow via
     :meth:`apply_chat_template`.
-    Handles both image preprocessing and text tokenization, inserting the
-    correct number of <image> placeholder tokens per image.
 
     SigLIP: fixed 196 tokens per image (after pixel shuffle).
     MoonViT: variable tokens per image = N_tiles * tokens_per_tile (4),
@@ -114,44 +97,6 @@ class TinyAyaVisionProcessor:
         """Return the (patched) chat template string."""
         return self.tokenizer.chat_template
 
-        if "base" not in config.llm_model_name:
-            # Patch the chat template so it can render multimodal content
-            self._patch_chat_template()
-
-    # ------------------------------------------------------------------
-    # Chat-template patching
-    # ------------------------------------------------------------------
-
-    def _patch_chat_template(self) -> None:
-        """Replace ``{{ message['content'] }}`` in the tokenizer's chat
-        template with a multimodal-aware renderer so that structured
-        messages (list-of-dicts with type: image / text) are handled
-        exactly the way aya-vision does it.
-        """
-        template = self.tokenizer.chat_template
-        if isinstance(template, dict):
-            template = template.get("default", "")
-        if template is None:
-            raise ValueError(
-                f"Tokenizer for {self.config.llm_model_name!r} has no chat "
-                "template. Use an instruction-tuned model like "
-                "'CohereLabs/tiny-aya-global' via TinyAyaVisionConfig.for_global()."
-            )
-
-        patched = template.replace(
-            "{{ message['content'] }}", _MULTIMODAL_CONTENT_RENDER
-        )
-        self.tokenizer.chat_template = patched
-
-    # ------------------------------------------------------------------
-    # Public helpers
-    # ------------------------------------------------------------------
-
-    @property
-    def chat_template(self) -> str:
-        """Return the (patched) chat template string."""
-        return self.tokenizer.chat_template
-
     @property
     def image_placeholder(self) -> str:
         """The string of <image> tokens to insert per image (SigLIP only).
@@ -169,8 +114,9 @@ class TinyAyaVisionProcessor:
         truncation: bool = False,
         max_length: "int | None" = None,
         add_generation_prompt: bool = True,
-        tokenize: bool = True,
+        tokenize: bool = False,
         return_tensors: str = "pt",
+        **kwargs,
     ) -> "dict[str, torch.Tensor] | str":
         """Format structured chat messages into model inputs.
 
@@ -203,10 +149,14 @@ class TinyAyaVisionProcessor:
             ``attention_mask``, and optionally ``pixel_values``.
             If *tokenize* is ``False``: the formatted text string.
         """
+        # continue_final_message and add_generation_prompt are mutually exclusive
+        if kwargs.get("continue_final_message"):
+            add_generation_prompt = False
         text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
+            **kwargs,
         )
 
         if not tokenize:
@@ -220,6 +170,7 @@ class TinyAyaVisionProcessor:
             max_length=max_length,
             return_tensors=return_tensors,
         )
+
     def _tokens_per_image(self, image_grid_hws: torch.Tensor | None, n_images: int) -> list[int]:
         """Compute how many <image> tokens each image expands to.
 
@@ -276,6 +227,9 @@ class TinyAyaVisionProcessor:
         if images is not None:
             if isinstance(images, Image.Image):
                 images = [images]
+            # lm-eval passes images as a list-of-lists [[img], [img], ...] -> flatten to [img, img, ...]
+            elif images and isinstance(images[0], list):
+                images = [img for sublist in images for img in sublist]
             image_inputs = self.image_processor(images=images, return_tensors=return_tensors)
             result["pixel_values"] = image_inputs["pixel_values"]
             if "image_grid_hws" in image_inputs:
@@ -304,4 +258,4 @@ class TinyAyaVisionProcessor:
         )
         result.update(text_inputs)
 
-        return result
+        return BatchFeature(result)
