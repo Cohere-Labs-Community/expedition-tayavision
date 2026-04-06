@@ -11,6 +11,10 @@ jobs:
             github.event.issue.pull_request &&
             startsWith(github.event.comment.body, '/run ')
         runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            issues: write
+            pull-requests: write
         env:
             MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
             MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
