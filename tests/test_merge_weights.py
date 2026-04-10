@@ -219,6 +219,20 @@ class TestBuildMergedVlmState:
                 f"Mismatch at key '{merged_key}' with α=1"
             )
 
+    def test_tied_key_in_original_only_is_silently_excluded(self):
+        """Keys in original absent from finetuned (weight-tied) must be excluded from LERP,
+        not raise and not appear in merged state."""
+        # original has lm_head.weight (as PyTorch state_dict() would return)
+        orig_llm = {"model.embed_tokens.weight": torch.randn(4, 4), "lm_head.weight": torch.randn(4, 4)}
+        # finetuned checkpoint omits lm_head.weight (HF save_pretrained omits tied keys)
+        ft_vlm = _make_vlm_state(llm_keys=["model.embed_tokens.weight"])
+
+        merged = build_merged_vlm_state(orig_llm, ft_vlm, alpha=0.5)
+
+        # lm_head.weight must NOT be in merged (it's tied, not saved separately)
+        assert f"{LLM_PREFIX}lm_head.weight" not in merged
+        # embed_tokens.weight must be present and LERP'd
+        assert f"{LLM_PREFIX}model.embed_tokens.weight" in merged
 
 # ---------------------------------------------------------------------------
 # Output file written to disk
