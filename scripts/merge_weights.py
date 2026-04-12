@@ -176,6 +176,15 @@ def build_merged_vlm_state(
     ft_llm_state = extract_llm_state_dict(finetuned_vlm_state)
     non_llm_state = extract_non_llm_state_dict(finetuned_vlm_state)
 
+    tied_keys = set(original_llm_state) - set(ft_llm_state)
+    if tied_keys:
+        log.info(
+            "Excluding %d key(s) from original absent in finetuned "
+            "(weight-tied or not saved — will be restored on model load): %s",
+            len(tied_keys), sorted(tied_keys),
+        )
+        original_llm_state = {k: v for k, v in original_llm_state.items() if k not in tied_keys}
+
     log.info(
         "Merging %d LLM parameter tensors with α=%.2f …", len(original_llm_state), alpha
     )

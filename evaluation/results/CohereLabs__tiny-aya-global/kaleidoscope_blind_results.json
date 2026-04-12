@@ -1,0 +1,77 @@
+{
+  "kaleidoscope_blind": {
+    "acc,none": 0.260670841567809
+  },
+  "kaleidoscope_blind_ar": {
+    "acc,none": 0.28272251308900526,
+    "acc_stderr,none": 0.023070728501720778
+  },
+  "kaleidoscope_blind_bn": {
+    "acc,none": 0.23125,
+    "acc_stderr,none": 0.014916263457025666
+  },
+  "kaleidoscope_blind_de": {
+    "acc,none": 0.2756232686980609,
+    "acc_stderr,none": 0.01664073684297648
+  },
+  "kaleidoscope_blind_en": {
+    "acc,none": 0.3187960687960688,
+    "acc_stderr,none": 0.011553172956259551
+  },
+  "kaleidoscope_blind_es": {
+    "acc,none": 0.28205128205128205,
+    "acc_stderr,none": 0.011693195801476224
+  },
+  "kaleidoscope_blind_fa": {
+    "acc,none": 0.2325,
+    "acc_stderr,none": 0.009448095482906968
+  },
+  "kaleidoscope_blind_fr": {
+    "acc,none": 0.24278215223097113,
+    "acc_stderr,none": 0.015542700235262984
+  },
+  "kaleidoscope_blind_hi": {
+    "acc,none": 0.24125132555673381,
+    "acc_stderr,none": 0.009854353774603447
+  },
+  "kaleidoscope_blind_hr": {
+    "acc,none": 0.24074074074074073,
+    "acc_stderr,none": 0.0237885835516586
+  },
+  "kaleidoscope_blind_hu": {
+    "acc,none": 0.24375,
+    "acc_stderr,none": 0.01283482533137336
+  },
+  "kaleidoscope_blind_lt": {
+    "acc,none": 0.3191176470588235,
+    "acc_stderr,none": 0.0178886086293994
+  },
+  "kaleidoscope_blind_ne": {
+    "acc,none": 0.19047619047619047,
+    "acc_stderr,none": 0.03512207412302052
+  },
+  "kaleidoscope_blind_nl": {
+    "acc,none": 0.2779960707269155,
+    "acc_stderr,none": 0.014048457204975598
+  },
+  "kaleidoscope_blind_pt": {
+    "acc,none": 0.336,
+    "acc_stderr,none": 0.01056445947041073
+  },
+  "kaleidoscope_blind_ru": {
+    "acc,none": 0.22247706422018348,
+    "acc_stderr,none": 0.009962091662416642
+  },
+  "kaleidoscope_blind_sr": {
+    "acc,none": 0.259,
+    "acc_stderr,none": 0.009798341887884702
+  },
+  "kaleidoscope_blind_te": {
+    "acc,none": 0.232,
+    "acc_stderr,none": 0.013354937452281624
+  },
+  "kaleidoscope_blind_uk": {
+    "acc,none": 0.2635408245755861,
+    "acc_stderr,none": 0.012531095896488676
+  }
+}

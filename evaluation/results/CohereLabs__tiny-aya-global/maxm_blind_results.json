@@ -1,0 +1,33 @@
+{
+  "maxm_blind": {
+    "exact_match,none": 0.0005330490405117271
+  },
+  "maxm_blind_en": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "maxm_blind_fr": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "maxm_blind_hi": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "maxm_blind_iw": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "maxm_blind_ro": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  },
+  "maxm_blind_th": {
+    "exact_match,none": 0.0037313432835820895,
+    "exact_match_stderr,none": 0.00373134328358209
+  },
+  "maxm_blind_zh": {
+    "exact_match,none": 0.0,
+    "exact_match_stderr,none": 0.0
+  }
+}

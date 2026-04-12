@@ -1,8 +1,7 @@
 from dataclasses import dataclass
 
 import torch
-from transformers import AutoModelForCausalLM, PreTrainedModel
-from transformers.generation import GenerationMixin
+from transformers import AutoModelForCausalLM, GenerationMixin, PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
 from config.model_config import TinyAyaVisionConfig
@@ -37,7 +36,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
     main_input_name = "input_ids"
     _supports_flash_attn_2 = False
     _no_split_modules = ["SigLIPVisionEncoder", "MoonViTVisionEncoder"]
-    _tied_weights_keys = ["language_model.lm_head.weight"]
+    _tied_weights_keys = {"language_model.lm_head.weight": "language_model.model.embed_tokens.weight"}
 
     def __init__(self, config: TinyAyaVisionConfig):
         super().__init__(config)
@@ -60,6 +59,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
                 cache_dir=config.cache_dir,
             )
             config.text_config = self.language_model.config.to_dict()
+            config._text_config_obj = None  # invalidate cached config
 
         self.generation_config = self.language_model.generation_config
         self._image_token_id: int | None = config.image_token_id
@@ -91,6 +91,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         if num_added > 0:
             self.language_model.resize_token_embeddings(len(tokenizer))
             self.config.text_config = self.language_model.config.to_dict()
+            self.config._text_config_obj = None  # invalidate cached config
 
     def get_input_embeddings(self):
         return self.language_model.get_input_embeddings()
@@ -151,11 +152,16 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         else:
             flat_features = image_features.reshape(-1, image_features.shape[-1])
 
-        n_image_tokens = special_image_mask.sum().item()
+        n_image_tokens = special_image_mask.sum()
         n_image_features = flat_features.shape[0]
-        if n_image_tokens != n_image_features:
+        if torch.compiler.is_compiling():
+            # Inside torch.compile — skip the .item() validation to avoid
+            # graph breaks.  The masked_scatter below will raise if sizes
+            # are actually mismatched.
+            pass
+        elif n_image_tokens.item() != n_image_features:
             raise ValueError(
-                f"Image token count ({n_image_tokens}) != image feature count "
+                f"Image token count ({n_image_tokens.item()}) != image feature count "
                 f"({n_image_features}). Ensure the text has the correct number of "
                 f"<image> placeholder tokens for this encoder."
             )
@@ -183,7 +189,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
         image_features = None
-        if pixel_values is not None:
+        if pixel_values is not None and (input_ids == self.image_token_id).any():
             image_features = self.get_image_features(pixel_values, image_grid_hws)
             inputs_embeds = self._merge_image_features(
                 input_ids, inputs_embeds, image_features
@@ -224,6 +230,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         image_grid_hws=None,
         attention_mask=None,
         cache_position=None,
+        is_first_iteration=False,
         **kwargs,
     ):
         """Prepare model inputs for autoregressive generation.
@@ -237,6 +244,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             cache_position=cache_position,
+            is_first_iteration=is_first_iteration,
             **kwargs,
         )
 

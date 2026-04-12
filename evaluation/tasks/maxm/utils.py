@@ -1,7 +1,16 @@
-"""MaXM evaluation task utilities for lm-eval
+"""MaXM evaluation task utilities for lm-evaluation-harness.
 
-MaXM (Massively Multilingual Image Captioning and VQA)
-neulab/PangeaBench-maxm
+MaXM is a multilingual open-ended VQA benchmark with 7 languages.
+Dataset: floschne/maxm
+
+Splits are per-language: en, fr, hi, iw, ro, th, zh
+
+Fields:
+    question: str
+    answers: list[str] (multiple valid answers)
+    processed_answers: list[str] (expanded/normalized answers)
+    image: dict (encoded image bytes)
+    language: str
 
 Used standard VQA scoring
 - Normalized prediction and each ground truth
@@ -79,3 +88,20 @@ def maxm_process_results(doc, results):
     pred = results[0].strip()
     score = vqa_score(pred, doc.get("processed_answers", doc.get("answers", [])))
     return {"vqa_score": score}
+
+def maxm_blind_doc_to_text(doc):
+    """Format question as a text-only prompt."""
+    return f"Question: {doc['question']}\nAnswer:"
+
+
+def maxm_blind_doc_to_target(doc):
+    """Return the first valid answer as target."""
+    return doc["answers"][0]
+
+
+def maxm_blind_process_results(doc, results):
+    """Check if the model's answer matches any of the valid answers."""
+    pred = results[0].strip().lower()
+    valid_answers = [a.strip().lower() for a in doc["answers"]]
+
+    return {"exact_match": float(pred in valid_answers)}

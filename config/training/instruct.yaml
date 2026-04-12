@@ -1,0 +1,38 @@
+dataset_name: "liuhaotian/LLaVA-v1.5-mix665k"
+data_dir: "/llava-instruct"
+max_seq_len: 2048
+
+num_epochs: 1
+batch_size: 64
+grad_acc_steps: 32
+warmup_ratio: 0.03
+learning_rate: 2.0e-5
+weight_decay: 0.0
+lr_scheduler_type: "cosine"
+max_grad_norm: 1.0
+num_workers: 4
+
+torch_dtype: "bfloat16"
+
+models_dir: "/models"
+save_steps: 20
+logging_steps: 10
+seed: 42
+
+alignment_checkpoint: ""
+
+lora:
+  rank: 256
+  lora_alpha: 512
+  lora_dropout: 0.05
+  bias: "none"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  lora_a_lr_multiplier: 1.0
+  lora_b_lr_multiplier: 1.0

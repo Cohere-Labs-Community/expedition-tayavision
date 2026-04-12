@@ -9,17 +9,23 @@ Phase 2 training:
   - LLM backbone: LoRA adapters on upper layers (base weights frozen)
 
 Launch:
-  Single GPU:  python pipeline/train_instruct.py
-  Multi GPU:   torchrun --nproc_per_node=NUM_GPUS pipeline/train_instruct.py
+  Single GPU:  python pipeline/train_instruct.py  training=instruct
+  Multi GPU:   torchrun --nproc_per_node=NUM_GPUS pipeline/train_instruct.py  training=instruct
 """
 
 import json
 import os
 import re
+import sys
 import uuid
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
+
+import hydra
+from omegaconf import DictConfig, OmegaConf
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 import torch
@@ -210,6 +216,11 @@ def train(
             norm_cache["projector_token"] = norms
     hook_handle = raw.multi_modal_projector.register_forward_hook(_projector_hook)
 
+    # Pre-build param lists once instead of every accumulation step
+    projector_params = [p for p in raw.multi_modal_projector.parameters() if p.requires_grad]
+    lora_params = [p for p in raw.language_model.parameters() if p.requires_grad]
+    all_trainable_params = projector_params + lora_params
+
     for epoch in range(training_config.num_epochs):
         if sampler is not None:
             sampler.set_epoch(epoch)
@@ -245,16 +256,10 @@ def train(
             accumulated_loss += loss.item()
 
             if (step + 1) % training_config.grad_acc_steps == 0:
-                # Compute grad norms separately for projector and LoRA
-                projector_params = [p for p in raw.multi_modal_projector.parameters() if p.requires_grad and p.grad is not None]
-                lora_params = [p for p in raw.language_model.parameters() if p.requires_grad and p.grad is not None]
-
+                # Compute logging norms (no clipping) then clip once
                 projector_grad_norm = torch.nn.utils.clip_grad_norm_(projector_params, float("inf"))
                 lora_grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, float("inf"))
-
-                # Clip all trainable parameters (projector + LoRA)
-                trainable_params = [p for p in model.parameters() if p.requires_grad]
-                grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, training_config.max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(all_trainable_params, training_config.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -353,6 +358,11 @@ def main(
     torch.manual_seed(training_config.seed)
     torch.cuda.manual_seed_all(training_config.seed)
 
+    # Enable TF32 for matmul and cuDNN for ~10-20% speedup on Ampere+ GPUs
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+
     # Compute per-GPU batch size from global batch size
     assert training_config.batch_size % world_size == 0, (
         f"batch_size ({training_config.batch_size}) must be "
@@ -415,13 +425,17 @@ def main(
     model.vision_encoder.to(dtype=compute_dtype, non_blocking=True)
 
     model.language_model.base_model.enable_input_require_grads()
-    
-    # if training_config.enable_gradient_checkpointing:
-        # model.language_model.base_model.gradient_checkpointing_enable() # This is causing a problem wrt the current torch.compile and DDP setup, hence disabling it
 
     if use_ddp:
         model = DDP(model, device_ids=[local_rank])
     model = torch.compile(model)
+
+    # Enable gradient checkpointing AFTER torch.compile + DDP wrapping so
+    # # dynamo doesn't try to trace through the checkpointing hooks.
+    # raw_for_gc = _unwrap_model(model)
+    # raw_for_gc.language_model.base_model.gradient_checkpointing_enable(
+    #     gradient_checkpointing_kwargs={"use_reentrant": False}
+    # )
 
     resume_step = 0
     if resume_run_id:
@@ -444,6 +458,7 @@ def main(
 
     dataset = InstructDataset(
         config=model_config,
+        dataset_name=training_config.dataset_name,
         data_dir=training_config.data_dir,
         max_seq_len=training_config.max_seq_len,
     )
@@ -480,7 +495,7 @@ def main(
         num_workers=training_config.num_workers,
         pin_memory=True,
         persistent_workers=training_config.num_workers > 0,
-        prefetch_factor=2 if training_config.num_workers > 0 else None,
+        prefetch_factor=4 if training_config.num_workers > 0 else None,
         drop_last=False,
     )
 
@@ -536,12 +551,34 @@ def main(
         cleanup_ddp()
 
 
-if __name__ == "__main__":
-    model_config = TinyAyaVisionConfig.for_global()
-    lora_config = LoraAdapterConfig.from_vlm_config(model_config)
+def run(cfg: DictConfig):
+    """Hydra entry – convert DictConfig to typed configs and call main()."""
+    training_dict = OmegaConf.to_container(cfg.training, resolve=True)
+    lora_dict = training_dict.pop("lora", {})
+    training_config = InstructConfig(**training_dict)
+
+    model_config = TinyAyaVisionConfig.for_encoder(
+        cfg.vision.vision_encoder_type, llm=cfg.llm
+    )
+
+    # Derive layers_to_transform from model config if not in yaml
+    if "layers_to_transform" not in lora_dict:
+        n = model_config.num_llm_layers
+        lora_dict["layers_to_transform"] = list(range(n // 2, n))
+    lora_config = LoraAdapterConfig(**lora_dict)
 
     main(
-        training_config=InstructConfig(),
+        training_config=training_config,
         model_config=model_config,
         lora_config=lora_config,
+        resume_run_id=cfg.get("resume", None),
     )
+
+
+@hydra.main(version_base="1.3", config_path="../config", config_name="config")
+def hydra_main(cfg: DictConfig):
+    run(cfg)
+
+
+if __name__ == "__main__":
+    hydra_main()

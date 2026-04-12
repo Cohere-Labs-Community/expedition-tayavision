@@ -3,17 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoProcessor
 
 from config.model_config import TinyAyaVisionConfig
+from src.processing import TinyAyaVisionProcessor
 from .tiny_aya_vision import TinyAyaVisionForConditionalGeneration, TinyAyaVisionOutput
 
 if TYPE_CHECKING:
-    from src.processing import TinyAyaVisionProcessor
+    pass
 
 AutoConfig.register("tiny_aya_vision", TinyAyaVisionConfig)
 AutoModel.register(TinyAyaVisionConfig, TinyAyaVisionForConditionalGeneration)
 AutoModelForCausalLM.register(TinyAyaVisionConfig, TinyAyaVisionForConditionalGeneration)
+AutoProcessor.register(TinyAyaVisionConfig, TinyAyaVisionProcessor)
 
 
 def save_for_inference(
@@ -35,8 +37,7 @@ def save_for_inference(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(output_dir)
-    processor.tokenizer.save_pretrained(output_dir)
-    processor.image_processor.save_pretrained(output_dir)
+    processor.save_pretrained(output_dir)
 
 
 __all__ = [

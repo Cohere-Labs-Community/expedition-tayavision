@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import torch
 from PIL import Image
-from transformers import AutoImageProcessor, AutoTokenizer
+from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer, ProcessorMixin
 from transformers.feature_extraction_utils import BatchFeature
 
 from config.model_config import TinyAyaVisionConfig
@@ -22,7 +24,7 @@ _MULTIMODAL_CONTENT_RENDER = (
 )
 
 
-class TinyAyaVisionProcessor:
+class TinyAyaVisionProcessor(ProcessorMixin):
     """Combined processor for Tiny Aya Vision multimodal inputs.
 
     Handles both image preprocessing (via SiglipImageProcessor) and text
@@ -38,30 +40,99 @@ class TinyAyaVisionProcessor:
     MoonViT: variable tokens per image = N_tiles * tokens_per_tile (4),
              where N_tiles depends on image resolution. The image processor
              is run first to determine N_tiles via image_grid_hws.
+
+    Usage (from config — for training)::
+
+        config = TinyAyaVisionConfig.for_encoder("siglip", llm="global")
+        processor = TinyAyaVisionProcessor(config=config)
+
+    Usage (from pretrained — after uploading to HF)::
+
+        processor = AutoProcessor.from_pretrained("your-hf-repo", trust_remote_code=True)
     """
 
-    def __init__(self, config: TinyAyaVisionConfig):
-        self.config = config
-        image_processor_kwargs = {}
-        if config.vision_encoder_type == "moonvit":
-            image_processor_kwargs["in_token_limit"] = config.in_token_limit
-        self.image_processor = AutoImageProcessor.from_pretrained(
-            config.vision_model_name,
-            cache_dir=config.cache_dir,
-            trust_remote_code=config.trust_remote_code,
-            **image_processor_kwargs,
-        )
-        self.tokenizer = AutoTokenizer.from_pretrained(config.llm_model_name, cache_dir=config.cache_dir)
+    attributes = ["image_processor", "tokenizer"]
+    image_processor_class = "AutoImageProcessor"
+    tokenizer_class = "AutoTokenizer"
+    processor_type = "TinyAyaVisionProcessor"
+
+    def __init__(
+        self,
+        image_processor=None,
+        tokenizer=None,
+        # Config-based construction (backward compat with training code)
+        config: TinyAyaVisionConfig | None = None,
+        # Extra kwargs stored in processor_config.json for from_pretrained
+        vision_encoder_type: str = "siglip",
+        image_token: str = "<image>",
+        num_tokens_after_shuffle: int = 196,
+        tokens_per_tile: int = 4,
+        in_token_limit: int = 1024,
+        patch_chat_template: bool = True,
+        **kwargs,
+    ):
+        # Support positional: TinyAyaVisionProcessor(config) for backward compat
+        if isinstance(image_processor, TinyAyaVisionConfig):
+            config = image_processor
+            image_processor = None
+
+        # Config-based construction: build sub-processors from config
+        if config is not None:
+            image_processor_kwargs = {}
+            if config.vision_encoder_type == "moonvit":
+                image_processor_kwargs["in_token_limit"] = config.in_token_limit
+            image_processor = AutoImageProcessor.from_pretrained(
+                config.vision_model_name,
+                cache_dir=config.cache_dir,
+                trust_remote_code=config.trust_remote_code,
+                **image_processor_kwargs,
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                config.llm_model_name, cache_dir=config.cache_dir,
+            )
+            vision_encoder_type = config.vision_encoder_type
+            image_token = config.image_token
+            num_tokens_after_shuffle = config.num_tokens_after_shuffle
+            tokens_per_tile = config.tokens_per_tile
+            in_token_limit = config.in_token_limit
+            patch_chat_template = "base" not in config.llm_model_name
+
+        super().__init__(image_processor=image_processor, tokenizer=tokenizer)
+
+        self.vision_encoder_type = vision_encoder_type
+        self.image_token = image_token
+        self.num_tokens_after_shuffle = num_tokens_after_shuffle
+        self.tokens_per_tile = tokens_per_tile
+        self.in_token_limit = in_token_limit
+        self.patch_chat_template = patch_chat_template
 
         # Add the <image> special token
         self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": [config.image_token]}
+            {"additional_special_tokens": [self.image_token]}
         )
-        self.image_token_id = self.tokenizer.convert_tokens_to_ids(config.image_token)
+        self.image_token_id = self.tokenizer.convert_tokens_to_ids(self.image_token)
 
-        if "base" not in config.llm_model_name:
-            # Patch the chat template so it can render multimodal content
+        if self.patch_chat_template:
             self._patch_chat_template()
+
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+
+    def to_dict(self):
+        """Serialize only the extra processor kwargs (not sub-processors)."""
+        output = {
+            "vision_encoder_type": self.vision_encoder_type,
+            "image_token": self.image_token,
+            "num_tokens_after_shuffle": self.num_tokens_after_shuffle,
+            "tokens_per_tile": self.tokens_per_tile,
+            "in_token_limit": self.in_token_limit,
+            "patch_chat_template": self.patch_chat_template,
+            "processor_class": self.__class__.__name__,
+        }
+        if hasattr(self, "image_processor") and self.image_processor is not None:
+            output["image_processor"] = self.image_processor.to_dict()
+        return output
 
     # ------------------------------------------------------------------
     # Chat-template patching
@@ -77,11 +148,7 @@ class TinyAyaVisionProcessor:
         if isinstance(template, dict):
             template = template.get("default", "")
         if template is None:
-            raise ValueError(
-                f"Tokenizer for {self.config.llm_model_name!r} has no chat "
-                "template. Use an instruction-tuned model like "
-                "'CohereLabs/tiny-aya-global' via TinyAyaVisionConfig.for_global()."
-            )
+            return
 
         patched = template.replace(
             "{{ message['content'] }}", _MULTIMODAL_CONTENT_RENDER
@@ -97,6 +164,11 @@ class TinyAyaVisionProcessor:
         """Return the (patched) chat template string."""
         return self.tokenizer.chat_template
 
+    @chat_template.setter
+    def chat_template(self, value):
+        if value is not None:
+            self.tokenizer.chat_template = value
+
     @property
     def image_placeholder(self) -> str:
         """The string of <image> tokens to insert per image (SigLIP only).
@@ -104,7 +176,7 @@ class TinyAyaVisionProcessor:
         For SigLIP: fixed num_tokens_after_shuffle (196) tokens.
         For MoonViT: token count is dynamic; use _tokens_per_image() instead.
         """
-        return self.config.image_token * self.config.num_tokens_after_shuffle
+        return self.image_token * self.num_tokens_after_shuffle
 
     def apply_chat_template(
         self,
@@ -179,7 +251,7 @@ class TinyAyaVisionProcessor:
                      returned by the MoonViT image processor (already accounts
                      for internal tiling/compression).
         """
-        if self.config.vision_encoder_type == "moonvit":
+        if self.vision_encoder_type == "moonvit":
             if image_grid_hws is None:
                 raise ValueError(
                     "image_grid_hws is required for MoonViT to determine token counts. "
@@ -188,7 +260,7 @@ class TinyAyaVisionProcessor:
             # image_grid_hws: (B, 2) — [H, W] grid per image; H * W = total visual tokens
             return (image_grid_hws[:, 0] * image_grid_hws[:, 1]).tolist()
         else:
-            return [self.config.num_tokens_after_shuffle] * n_images
+            return [self.num_tokens_after_shuffle] * n_images
 
     def __call__(
         self,
@@ -245,8 +317,8 @@ class TinyAyaVisionProcessor:
         expanded_text = []
         for i, t in enumerate(text):
             n = tokens_per_img[i] if i < len(tokens_per_img) else tokens_per_img[0]
-            placeholder = self.config.image_token * n
-            expanded_text.append(t.replace(self.config.image_token, placeholder))
+            placeholder = self.image_token * n
+            expanded_text.append(t.replace(self.image_token, placeholder))
 
         # Tokenize
         text_inputs = self.tokenizer(

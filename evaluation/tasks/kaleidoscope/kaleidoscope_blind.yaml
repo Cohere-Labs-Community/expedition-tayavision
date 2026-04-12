@@ -1,0 +1,20 @@
+group: kaleidoscope_blind
+task:
+  - kaleidoscope_blind_ar
+  - kaleidoscope_blind_bn
+  - kaleidoscope_blind_de
+  - kaleidoscope_blind_en
+  - kaleidoscope_blind_es
+  - kaleidoscope_blind_fa
+  - kaleidoscope_blind_fr
+  - kaleidoscope_blind_hi
+  - kaleidoscope_blind_hr
+  - kaleidoscope_blind_hu
+  - kaleidoscope_blind_lt
+  - kaleidoscope_blind_ne
+  - kaleidoscope_blind_nl
+  - kaleidoscope_blind_pt
+  - kaleidoscope_blind_ru
+  - kaleidoscope_blind_sr
+  - kaleidoscope_blind_te
+  - kaleidoscope_blind_uk

@@ -81,7 +81,7 @@ class AlignmentDataset(torch.utils.data.Dataset):
         return result
 
 class InstructDataset(torch.utils.data.Dataset):
-    """Dataset for instruction-finetuning with LLaVA-Instruct-150K.
+    """Dataset for instruction-finetuning with LLaVA-Instruct-150K / mix665k.
 
     Multi-turn conversations with images, formatted using the chat_template
     from the instruction-tuned backbone (tiny-aya-global). Labels are masked
@@ -90,19 +90,46 @@ class InstructDataset(torch.utils.data.Dataset):
 
     ROLE_MAP = {"human": "user", "gpt": "assistant"}
 
+    # Dataset name → JSON filename mapping
+    _JSON_FILES = {
+        "liuhaotian/LLaVA-Instruct-150K": "llava_instruct_150k.json",
+        "liuhaotian/LLaVA-v1.5-mix665k": "llava_v1_5_mix665k.json",
+    }
+
+    # 150K image paths are bare filenames from COCO; mix665k paths are
+    # already relative (e.g. "coco/train2017/xxx.jpg", "gqa/images/xxx.jpg").
+    _150K_IMAGE_PREFIX = Path("coco") / "train2017"
+
     def __init__(
         self,
         config: TinyAyaVisionConfig,
+        dataset_name: str = "liuhaotian/LLaVA-Instruct-150K",
         data_dir: str = "data/llava-instruct",
         max_seq_len: int = 2048,
     ):
         self.data_dir = Path(data_dir)
-        json_path = self.data_dir / "llava_instruct_150k.json"
+        self._is_mix665k = "mix665k" in dataset_name.lower()
+
+        json_filename = self._JSON_FILES.get(dataset_name)
+        if json_filename is None:
+            raise ValueError(
+                f"Unknown dataset_name '{dataset_name}'. "
+                f"Expected one of: {list(self._JSON_FILES.keys())}"
+            )
+        json_path = self.data_dir / json_filename
+
         print(f"Loading dataset from {json_path}...")
         with open(json_path, "r") as f:
             self.dataset = json.load(f)
-        # Keep only examples that have an image
-        self.dataset = [x for x in self.dataset if "image" in x]
+        # Keep only examples that have an image AND whose image file exists
+        before = len(self.dataset)
+        self.dataset = [
+            x for x in self.dataset
+            if "image" in x and (self.data_dir / x["image"]).exists()
+        ]
+        skipped = before - len(self.dataset)
+        if skipped:
+            print(f"Skipped {skipped} examples with missing images")
         print(f"Loaded {len(self.dataset)} examples")
 
         self.processor = TinyAyaVisionProcessor(config=config)
@@ -168,128 +195,19 @@ class InstructDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx):
-        item = self.dataset[idx]
-        image_path = self.data_dir / "coco" / "train2017" / item["image"]
-        image = Image.open(image_path).convert("RGB")
+    def _resolve_image_path(self, image_field: str) -> Path:
+        """Resolve the image path from the JSON ``image`` field.
 
-        messages = self._to_chat_messages(item["conversations"])
-
-        # Full conversation formatted via chat_template (no generation prompt)
-        full_text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False,
-        )
-
-        processed = self.processor(
-            text=full_text,
-            images=image,
-            truncation=True,
-            max_length=self.max_seq_len,
-        )
-
-        input_ids = processed["input_ids"].squeeze(0)
-        attention_mask = processed["attention_mask"].squeeze(0)
-        pixel_values = processed["pixel_values"].squeeze(0)
-        labels = self._build_labels(input_ids)
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "pixel_values": pixel_values,
-            "labels": labels,
-        }
-
-class InstructDataset(torch.utils.data.Dataset):
-    """Dataset for instruction-finetuning with LLaVA-Instruct-150K.
-
-    Multi-turn conversations with images, formatted using the chat_template
-    from the instruction-tuned backbone (tiny-aya-global). Labels are masked
-    so loss is computed only on assistant responses.
-    """
-
-    ROLE_MAP = {"human": "user", "gpt": "assistant"}
-
-    def __init__(
-        self,
-        config: TinyAyaVisionConfig,
-        data_dir: str = "data/llava-instruct",
-        max_seq_len: int = 2048,
-    ):
-        self.data_dir = Path(data_dir)
-        json_path = self.data_dir / "llava_instruct_150k.json"
-        print(f"Loading dataset from {json_path}...")
-        with open(json_path, "r") as f:
-            self.dataset = json.load(f)
-        # Keep only examples that have an image
-        self.dataset = [x for x in self.dataset if "image" in x]
-        print(f"Loaded {len(self.dataset)} examples")
-
-        self.processor = TinyAyaVisionProcessor(config=config)
-        self.max_seq_len = max_seq_len
-
-        # Cache special token IDs for label masking
-        self._chatbot_token_id = self.processor.tokenizer.convert_tokens_to_ids(
-            "<|CHATBOT_TOKEN|>"
-        )
-        self._end_turn_token_id = self.processor.tokenizer.convert_tokens_to_ids(
-            "<|END_OF_TURN_TOKEN|>"
-        )
-
-    def _to_chat_messages(self, conversations):
-        """Convert LLaVA conversation format to chat template messages.
-
-        The first user turn typically contains ``<image>\n`` which is
-        converted to structured multimodal content
-        ``[{"type": "image"}, {"type": "text", ...}]``.
+        mix665k paths are already relative (e.g. ``coco/train2017/xxx.jpg``).
+        150K paths are bare filenames that live under ``coco/train2017/``.
         """
-        messages = []
-        for turn in conversations:
-            role = self.ROLE_MAP[turn["from"]]
-            value = turn["value"]
-
-            if role == "user" and "<image>" in value:
-                text = (
-                    value.replace("<image>\n", "")
-                    .replace("\n<image>", "")
-                    .replace("<image>", "")
-                    .strip()
-                )
-                content = [{"type": "image"}, {"type": "text", "text": text}]
-            else:
-                content = value
-
-            messages.append({"role": role, "content": content})
-        return messages
-
-    def _build_labels(self, input_ids):
-        """Mask labels so loss is computed only on assistant response tokens.
-
-        Scans for ``<|CHATBOT_TOKEN|>`` (response start) and
-        ``<|END_OF_TURN_TOKEN|>`` (response end) to identify the assistant
-        spans.  The chatbot marker itself is masked; the end-of-turn token
-        is included so the model learns to emit it.
-        """
-        labels = torch.full_like(input_ids, -100)
-        in_response = False
-        for i in range(len(input_ids)):
-            tok = input_ids[i].item()
-            if tok == self._chatbot_token_id:
-                in_response = True
-                continue
-            if in_response and tok == self._end_turn_token_id:
-                labels[i] = input_ids[i]
-                in_response = False
-                continue
-            if in_response:
-                labels[i] = input_ids[i]
-        return labels
-
-    def __len__(self):
-        return len(self.dataset)
+        if self._is_mix665k:
+            return self.data_dir / image_field
+        return self.data_dir / self._150K_IMAGE_PREFIX / image_field
 
     def __getitem__(self, idx):
         item = self.dataset[idx]
-        image_path = self.data_dir / "coco" / "train2017" / item["image"]
+        image_path = self._resolve_image_path(item["image"])
         image = Image.open(image_path).convert("RGB")
 
         messages = self._to_chat_messages(item["conversations"])

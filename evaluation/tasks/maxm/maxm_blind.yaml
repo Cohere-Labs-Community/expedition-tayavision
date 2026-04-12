@@ -1,0 +1,9 @@
+group: maxm_blind
+task:
+  - maxm_blind_en
+  - maxm_blind_fr
+  - maxm_blind_hi
+  - maxm_blind_iw
+  - maxm_blind_ro
+  - maxm_blind_th
+  - maxm_blind_zh

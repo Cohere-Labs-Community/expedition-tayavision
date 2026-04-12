@@ -1,12 +1,12 @@
 defaults:
   - _self_
-  - vision: moonvit
-  - training: alignment
+  - vision: siglip
+  - training: instruct
 
-llm: base
+llm: global
 resume: null
 
 wandb:
-  project: tayavision
+  project: tayavision-instruct
   entity: null
   mode: online

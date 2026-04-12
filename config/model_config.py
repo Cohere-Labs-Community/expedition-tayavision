@@ -73,11 +73,24 @@ class TinyAyaVisionConfig(PretrainedConfig):
         self.vision_feature_layer = vision_feature_layer
         self.vision_feature_select_strategy = vision_feature_select_strategy
         self.cache_dir = cache_dir
-        
-        # all fields are stored directly on TinyAyaVisionConfig
-        self.text_config = None
-        self.vision_tower_config = None
+        self.text_config = text_config
+        self.vision_tower_config = vision_tower_config
+        self._text_config_obj = None
         super().__init__(torch_dtype=torch_dtype, **kwargs)
+
+    def get_text_config(self, decoder: bool = False) -> "PretrainedConfig":
+        """Return a proper PretrainedConfig for the LLM sub-model.
+
+        Required by transformers >=4.56 for DynamicCache initialization
+        during generate().
+        """
+        if self._text_config_obj is None and self.text_config is not None:
+            from transformers import CONFIG_MAPPING
+            text_cls = CONFIG_MAPPING[self.text_config["model_type"]]
+            self._text_config_obj = text_cls.from_dict(self.text_config)
+        if self._text_config_obj is not None:
+            return self._text_config_obj
+        return super().get_text_config(decoder=decoder)
 
     @classmethod
     def for_base(cls) -> TinyAyaVisionConfig:
