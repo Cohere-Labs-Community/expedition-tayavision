@@ -2,7 +2,7 @@
 name = "expedition-tayavision"
 version = "0.1.0"
 description = "Tiny Aya Vision - Training vision language models as part of the Tiny Aya Expedition"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.11,<3.14"
 
 dependencies = [
     # Core ML framework
@@ -35,13 +35,14 @@ dependencies = [
     "peft>=0.13.0",
     # Evaluation
     "lm-eval>=0.4.0",
+    # LLM-as-judge (m-ArenaHard)
+    "cohere>=5.0.0",
     # Quantization
     "bitsandbytes>=0.43.0",
     # Fast fine-tuning
     "unsloth>=2024.10.0",
     # Environment
     "python-dotenv>=1.0.1",
-    "modal>=1.3.5",
 ]
 
 [dependency-groups]
@@ -51,14 +52,17 @@ dev = [
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
 explicit = true
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cu124", marker = "platform_system == 'Linux'" },
+    { index = "pytorch-cu118", marker = "platform_system == 'Linux'" },
 ]
 torchvision = [
-    { index = "pytorch-cu124", marker = "platform_system == 'Linux'" },
+    { index = "pytorch-cu118", marker = "platform_system == 'Linux'" },
 ]
+
+[tool.uv.extra-build-dependencies]
+xformers = ["torch"]

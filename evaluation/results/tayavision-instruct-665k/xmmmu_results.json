@@ -1,0 +1,15 @@
+{
+  "benchmark": "xMMMU",
+  "model": "TrishanuDas/tayavision-instruct-665k",
+  "overall_accuracy": 32.22,
+  "total_correct": 290,
+  "total_samples": 900,
+  "per_language": {
+    "en": {
+      "correct": 290,
+      "total": 900,
+      "accuracy": 32.22
+    }
+  },
+  "time_seconds": 1399.4
+}
