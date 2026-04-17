@@ -37,8 +37,6 @@ dependencies = [
     "lm-eval>=0.4.0",
     # Quantization
     "bitsandbytes>=0.43.0",
-    # Fast fine-tuning
-    "unsloth>=2024.10.0",
     # Environment
     "python-dotenv>=1.0.1",
     "modal>=1.3.5",
