@@ -431,11 +431,11 @@ def main(
     model = torch.compile(model)
 
     # Enable gradient checkpointing AFTER torch.compile + DDP wrapping so
-    # # dynamo doesn't try to trace through the checkpointing hooks.
-    # raw_for_gc = _unwrap_model(model)
-    # raw_for_gc.language_model.base_model.gradient_checkpointing_enable(
-    #     gradient_checkpointing_kwargs={"use_reentrant": False}
-    # )
+    # dynamo doesn't try to trace through the checkpointing hooks.
+    raw_for_gc = _unwrap_model(model)
+    raw_for_gc.language_model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={"use_reentrant": False}
+    )
 
     resume_step = 0
     if resume_run_id:

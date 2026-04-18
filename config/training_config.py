@@ -37,8 +37,8 @@ class InstructConfig(AlignmentConfig):
 
     models_dir: str = "/models"
 
-    batch_size: int = 128  # global batch size across all GPUs(per-gpu batch size * world_size)
-    grad_acc_steps: int = 32
+    batch_size: int = 8  # global batch size across all GPUs(per-gpu batch size * world_size)
+    grad_acc_steps: int = 64
     learning_rate: float = 2e-5
 
     # Path to alignment checkpoint (.pt) to initialise the projector from

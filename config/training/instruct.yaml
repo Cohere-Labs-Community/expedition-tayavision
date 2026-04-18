@@ -1,4 +1,4 @@
-dataset_name: "liuhaotian/LLaVA-v1.5-mix665k"
+dataset_name: "liuhaotian/llava_instruct_150k"
 data_dir: "/llava-instruct"
 max_seq_len: 2048
 
