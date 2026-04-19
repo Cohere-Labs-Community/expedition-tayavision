@@ -428,7 +428,7 @@ def main(
 
     if use_ddp:
         model = DDP(model, device_ids=[local_rank])
-    model = torch.compile(model)
+    model = torch.compile(model, dynamic=False)
 
     # Enable gradient checkpointing AFTER torch.compile + DDP wrapping so
     # dynamo doesn't try to trace through the checkpointing hooks.

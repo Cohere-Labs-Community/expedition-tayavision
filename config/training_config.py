@@ -37,8 +37,9 @@ class InstructConfig(AlignmentConfig):
 
     models_dir: str = "/models"
 
-    batch_size: int = 8  # global batch size across all GPUs(per-gpu batch size * world_size)
-    grad_acc_steps: int = 64
+    batch_size: int = 4  # global batch size across all GPUs (per-gpu batch size * world_size)
+    grad_acc_steps: int = 128  # keeps effective batch size = 512
+    max_seq_len: int = 1536   # instruct conversations are longer than pretrain captions
     learning_rate: float = 2e-5
 
     # Path to alignment checkpoint (.pt) to initialise the projector from
