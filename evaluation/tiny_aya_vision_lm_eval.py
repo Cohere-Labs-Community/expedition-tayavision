@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import time
-
 import transformers
 from lm_eval.api.registry import register_model
 from lm_eval.models.hf_vlms import HFMultimodalLM
@@ -38,6 +37,27 @@ def request_key(request) -> str:
 class TinyAyaVisionLM(HFMultimodalLM):
     AUTO_MODEL_CLASS = transformers.AutoModelForCausalLM
 
+    def __init__(self, pretrained, image_token_id=None, **kwargs):
+        # Pass image_string to bypass lm-eval's image_token_id assertion —
+        # our saved config has image_token_id=null, but we derive it from the
+        # processor in _create_tokenizer. We set self.image_token_id after
+        # super().__init__() once the processor is available.
+        kwargs.setdefault("image_string", "<image>")
+        super().__init__(pretrained, **kwargs)
+        self.image_token_id = image_token_id or self.processor.image_token_id
+
+    def _create_model(self, pretrained, revision="main", dtype="auto", trust_remote_code=False, **kwargs):
+        from transformers import AutoModelForCausalLM
+        cache_dir = kwargs.get("cache_dir") or None
+        self._model = AutoModelForCausalLM.from_pretrained(
+            pretrained,
+            revision=revision,
+            dtype=dtype,
+            trust_remote_code=trust_remote_code,
+            cache_dir=cache_dir,
+            device_map="auto",
+        )
+
     def _create_tokenizer(
         self,
         pretrained,
@@ -46,9 +66,34 @@ class TinyAyaVisionLM(HFMultimodalLM):
         trust_remote_code=False,
         **kwargs,
     ):
-        # Load TinyAyaVisionProcessor directly
+        cache_dir = kwargs.get("cache_dir") or None
+
+        # Prefer processor/tokenizer files from the same HF repo/local model
+        # directory. Transformers will download missing files into the normal
+        # HF Hub cache unless cache_dir is explicitly set.
         model_path = pretrained if isinstance(pretrained, str) else self.model.name_or_path
-        vlm_config = TinyAyaVisionConfig.from_pretrained(model_path)
+        try:
+            self.processor = TinyAyaVisionProcessor.from_pretrained(
+                model_path,
+                revision=revision,
+                trust_remote_code=trust_remote_code,
+                cache_dir=cache_dir,
+            )
+            self.tokenizer = self.processor.tokenizer
+            return
+        except (OSError, ValueError, AttributeError) as exc:
+            logger.info(
+                "Falling back to config-based TinyAyaVisionProcessor loading: %s",
+                exc,
+            )
+
+        vlm_config = TinyAyaVisionConfig.from_pretrained(
+            model_path,
+            revision=revision,
+            trust_remote_code=trust_remote_code,
+            cache_dir=cache_dir,
+        )
+        vlm_config.cache_dir = cache_dir
         self.processor = TinyAyaVisionProcessor(vlm_config)
         self.tokenizer = self.processor.tokenizer
 
@@ -109,7 +154,7 @@ class TinyAyaVisionLM(HFMultimodalLM):
             batch_orig_indices = pending_indices[batch_start:batch_end]
             batch_requests = [requests[i] for i in batch_orig_indices]
 
-            batch_responses = super().generate_until(batch_requests, disable_tqdm=True)
+            batch_responses = super().generate_until(batch_requests, disable_tqdm=disable_tqdm)
 
             # Write each response to the checkpoint file with task-specific fields.
             if checkpoint_file:
