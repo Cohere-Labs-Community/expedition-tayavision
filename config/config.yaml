@@ -7,6 +7,6 @@ llm: global
 resume: null
 
 wandb:
-  project: tayavision-instruct
+  project: tayavision-multilingual
   entity: null
   mode: online

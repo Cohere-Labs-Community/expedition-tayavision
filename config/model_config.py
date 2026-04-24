@@ -78,19 +78,31 @@ class TinyAyaVisionConfig(PretrainedConfig):
         self._text_config_obj = None
         super().__init__(torch_dtype=torch_dtype, **kwargs)
 
-    def get_text_config(self, decoder: bool = False) -> "PretrainedConfig":
+    def get_text_config(self, decoder: bool = False, **kwargs) -> "PretrainedConfig":
         """Return a proper PretrainedConfig for the LLM sub-model.
 
         Required by transformers >=4.56 for DynamicCache initialization
-        during generate().
+        during generate().  Must always return a real PretrainedConfig,
+        never the raw dict stored in self.text_config, because callers
+        (e.g. GenerationConfig.from_model_config) call .to_dict() on it.
         """
-        if self._text_config_obj is None and self.text_config is not None:
-            from transformers import CONFIG_MAPPING
+        from transformers import CONFIG_MAPPING, PretrainedConfig as _PC
+
+        # _text_config_obj may be a dict after JSON round-trip; coerce it.
+        if isinstance(self._text_config_obj, dict):
+            d = self._text_config_obj
+            text_cls = CONFIG_MAPPING[d["model_type"]]
+            self._text_config_obj = text_cls.from_dict(d)
+        if isinstance(self._text_config_obj, _PC):
+            return self._text_config_obj
+
+        # Build from text_config dict if available
+        if isinstance(self.text_config, dict) and "model_type" in self.text_config:
             text_cls = CONFIG_MAPPING[self.text_config["model_type"]]
             self._text_config_obj = text_cls.from_dict(self.text_config)
-        if self._text_config_obj is not None:
             return self._text_config_obj
-        return super().get_text_config(decoder=decoder)
+
+        return self
 
     @classmethod
     def for_base(cls) -> TinyAyaVisionConfig:

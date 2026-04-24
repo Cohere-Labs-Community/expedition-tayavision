@@ -18,9 +18,14 @@ import os
 import re
 import sys
 import uuid
+from contextlib import nullcontext
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
+
+# Persist torch.compile cache across runs to avoid 12+ min cold starts
+_CACHE_DIR = str(Path(__file__).resolve().parent.parent / ".inductor_cache")
+os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", _CACHE_DIR)
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -139,16 +144,20 @@ def generate_samples(
 
         prompt_ids = batch["input_ids"][i, :prompt_len].unsqueeze(0).to(device)
         prompt_mask = batch["attention_mask"][i, :prompt_len].unsqueeze(0).to(device)
-        pixel_values = batch["pixel_values"][i].unsqueeze(0).to(device)
+        has_image = (
+            batch["pixel_values"] is not None
+            and i < batch["pixel_values"].size(0)
+        )
 
         with torch.autocast("cuda", dtype=compute_dtype):
-            # Pre-compute inputs_embeds with vision features merged so that
-            # generate() never needs to call _merge_image_features itself.
             inputs_embeds = raw.get_input_embeddings()(prompt_ids)
-            image_features = raw.get_image_features(pixel_values)
-            inputs_embeds = raw._merge_image_features(
-                prompt_ids, inputs_embeds, image_features,
-            )
+
+            if has_image and (prompt_ids == raw.image_token_id).any():
+                pixel_values = batch["pixel_values"][i].unsqueeze(0).to(device)
+                image_features = raw.get_image_features(pixel_values)
+                inputs_embeds = raw._merge_image_features(
+                    prompt_ids, inputs_embeds, image_features,
+                )
 
             gen_ids = raw.generate(
                 inputs_embeds=inputs_embeds,
@@ -164,17 +173,21 @@ def generate_samples(
         prompt_text = processor.tokenizer.decode(prompt_ids[0], skip_special_tokens=True)
         gen_text = processor.tokenizer.decode(new_ids, skip_special_tokens=True)
 
-        # Denormalize pixel values → [0, 255] PIL image for wandb
-        img_tensor = batch["pixel_values"][i].float().cpu()
-        mean = torch.tensor(processor.image_processor.image_mean).view(3, 1, 1)
-        std = torch.tensor(processor.image_processor.image_std).view(3, 1, 1)
-        img_tensor = (img_tensor * std + mean).clamp(0, 1)
-        img_pil = Image.fromarray(
-            (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-        )
+        if has_image:
+            # Denormalize pixel values → [0, 255] PIL image for wandb
+            img_tensor = batch["pixel_values"][i].float().cpu()
+            mean = torch.tensor(processor.image_processor.image_mean).view(3, 1, 1)
+            std = torch.tensor(processor.image_processor.image_std).view(3, 1, 1)
+            img_tensor = (img_tensor * std + mean).clamp(0, 1)
+            img_pil = Image.fromarray(
+                (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            )
+            img_wandb = wandb.Image(img_pil)
+        else:
+            img_wandb = None
 
         results.append({
-            "image": wandb.Image(img_pil),
+            "image": img_wandb,
             "prompt": prompt_text,
             "generation": gen_text,
         })
@@ -199,7 +212,7 @@ def train(
     step_offset: int = 0,
 ):
     model.train()
-    accumulated_loss = 0.0
+    accumulated_loss = torch.tensor(0.0, device=device)
     max_image_tokens_in_window = 0
     use_ddp = dist.is_initialized()
     is_main = (not use_ddp) or dist.get_rank() == 0
@@ -234,7 +247,7 @@ def train(
             input_ids, attention_mask, pixel_values, labels = (
                 batch["input_ids"].to(device, non_blocking=True),
                 batch["attention_mask"].to(device, non_blocking=True),
-                batch["pixel_values"].to(device, non_blocking=True),
+                batch["pixel_values"].to(device, non_blocking=True) if batch["pixel_values"] is not None else None,
                 batch["labels"].to(device, non_blocking=True),
             )
 
@@ -243,22 +256,30 @@ def train(
                 (input_ids == image_token_id).sum(dim=1).max().item(),
             )
 
-            with torch.autocast("cuda", dtype=compute_dtype):
-                outputs = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    pixel_values=pixel_values,
-                    labels=labels,
-                    use_cache=False,
-                )
-                loss = outputs.loss / training_config.grad_acc_steps
-            loss.backward()
-            accumulated_loss += loss.item()
+            # Skip DDP gradient sync on non-final accumulation steps
+            is_sync_step = (step + 1) % training_config.grad_acc_steps == 0
+            no_sync = use_ddp and not is_sync_step
+            # no_sync() must target the DDP wrapper, not the torch.compile wrapper
+            ddp_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+            ctx = ddp_model.no_sync() if no_sync else nullcontext()
 
-            if (step + 1) % training_config.grad_acc_steps == 0:
+            with ctx:
+                with torch.autocast("cuda", dtype=compute_dtype):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        pixel_values=pixel_values,
+                        labels=labels,
+                        use_cache=False,
+                    )
+                    loss = outputs.loss / training_config.grad_acc_steps
+                loss.backward()
+            accumulated_loss += loss.detach()
+
+            if is_sync_step:
                 # Compute logging norms (no clipping) then clip once
-                projector_grad_norm = torch.nn.utils.clip_grad_norm_(projector_params, float("inf"))
-                lora_grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, float("inf"))
+                # projector_grad_norm = torch.nn.utils.clip_grad_norm_(projector_params, float("inf"))
+                # lora_grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, float("inf"))
                 grad_norm = torch.nn.utils.clip_grad_norm_(all_trainable_params, training_config.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
@@ -272,24 +293,44 @@ def train(
                 num_response_tokens = num_total_tokens - num_masked_tokens
                 masked_pct = 100.0 * num_masked_tokens / num_total_tokens
 
+                # Capture lightweight logging values on GPU before barrier
+                if is_main:
+                    _loss_val = accumulated_loss.item()
+                    _grad_norm_val = grad_norm.item()
+                    # _proj_grad_val = projector_grad_norm.item()
+                    # _lora_grad_val = lora_grad_norm.item()
+                    _lr_val = lr_scheduler.get_last_lr()[0]
+
+                    if "projector_token" in norm_cache:
+                        pn = norm_cache["projector_token"]
+                        _pn_mean = pn.mean().item()
+                        _pn_std = pn.std().item()
+                        _pn_min = pn.min().item()
+                        _pn_max = pn.max().item()
+
+                    _should_save = opt_step % training_config.save_steps == 0
+
+                # Barrier BEFORE logging so other ranks don't wait for wandb I/O
+                if use_ddp:
+                    dist.barrier()
+
                 if is_main:
                     log_dict = {
-                        "train/loss": accumulated_loss,
-                        "train/grad_norm": grad_norm.item(),
-                        "train/grad_norm_projector": projector_grad_norm.item(),
-                        "train/grad_norm_lora": lora_grad_norm.item(),
-                        "train/lr": lr_scheduler.get_last_lr()[0],
+                        "train/loss": _loss_val,
+                        "train/grad_norm": _grad_norm_val,
+                        # "train/grad_norm_projector": _proj_grad_val,
+                        # "train/grad_norm_lora": _lora_grad_val,
+                        "train/lr": _lr_val,
                         "train/response_tokens": num_response_tokens,
                         "train/masked_pct": masked_pct,
                         "train/max_image_tokens": max_image_tokens_in_window,
                     }
 
                     if "projector_token" in norm_cache:
-                        pn = norm_cache["projector_token"]
-                        log_dict["norms/projector_token_mean"] = pn.mean().item()
-                        log_dict["norms/projector_token_std"] = pn.std().item()
-                        log_dict["norms/projector_token_min"] = pn.min().item()
-                        log_dict["norms/projector_token_max"] = pn.max().item()
+                        log_dict["norms/projector_token_mean"] = _pn_mean
+                        log_dict["norms/projector_token_std"] = _pn_std
+                        log_dict["norms/projector_token_min"] = _pn_min
+                        log_dict["norms/projector_token_max"] = _pn_max
 
                         emb_w = raw.get_input_embeddings().weight.detach().float()
                         emb_norms = emb_w.norm(dim=-1)
@@ -298,12 +339,12 @@ def train(
                         log_dict["norms/emb_matrix_min"] = emb_norms.min().item()
                         log_dict["norms/emb_matrix_max"] = emb_norms.max().item()
 
-                    pbar.set_postfix(loss=f"{accumulated_loss:.4f}", lr=f"{lr_scheduler.get_last_lr()[0]:.2e}", gnorm=f"{grad_norm.item():.2f}")
+                    pbar.set_postfix(loss=f"{_loss_val:.4f}", lr=f"{_lr_val:.2e}", gnorm=f"{_grad_norm_val:.2f}")
 
                     if opt_step % training_config.logging_steps == 0:
-                        tqdm.write(f"Epoch {epoch}, Opt Step {opt_step}, Loss {accumulated_loss:.4f}, LR {lr_scheduler.get_last_lr()[0]}")
+                        tqdm.write(f"Epoch {epoch}, Opt Step {opt_step}, Loss {_loss_val:.4f}, LR {_lr_val}")
 
-                    if opt_step % training_config.save_steps == 0:
+                    if _should_save:
                         save_checkpoint(checkpoint_dir, step + 1, model, optimizer, lr_scheduler)
 
                         if processor is not None:
@@ -321,10 +362,7 @@ def train(
 
                     wandb.log(log_dict, step=opt_step)
 
-                if use_ddp:
-                    dist.barrier()
-
-                accumulated_loss = 0.0
+                accumulated_loss.zero_()
                 max_image_tokens_in_window = 0
 
     hook_handle.remove()
@@ -427,15 +465,17 @@ def main(
     model.language_model.base_model.enable_input_require_grads()
 
     if use_ddp:
-        model = DDP(model, device_ids=[local_rank])
+        model = DDP(model, device_ids=[local_rank], gradient_as_bucket_view=True)
+    # torch._dynamo needs to handle the varying DDP sync state from no_sync()
+    torch._dynamo.config.optimize_ddp = "python_reducer"
     model = torch.compile(model)
 
     # Enable gradient checkpointing AFTER torch.compile + DDP wrapping so
     # # dynamo doesn't try to trace through the checkpointing hooks.
-    # raw_for_gc = _unwrap_model(model)
-    # raw_for_gc.language_model.base_model.gradient_checkpointing_enable(
-    #     gradient_checkpointing_kwargs={"use_reentrant": False}
-    # )
+    raw_for_gc = _unwrap_model(model)
+    raw_for_gc.language_model.base_model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={"use_reentrant": False}
+    )
 
     resume_step = 0
     if resume_run_id:
@@ -483,7 +523,7 @@ def main(
     else:
         sampler = None
 
-    loader = torch.utils.data.DataLoader(
+    dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=per_gpu_batch_size,
         shuffle=(sampler is None),
@@ -495,7 +535,7 @@ def main(
         num_workers=training_config.num_workers,
         pin_memory=True,
         persistent_workers=training_config.num_workers > 0,
-        prefetch_factor=4 if training_config.num_workers > 0 else None,
+        prefetch_factor=8 if training_config.num_workers > 0 else None,
         drop_last=False,
     )
 
@@ -532,7 +572,7 @@ def main(
 
     train(
         model=model,
-        dataloader=loader,
+        dataloader=dataloader,
         sampler=sampler,
         optimizer=opt,
         lr_scheduler=lr_scheduler,

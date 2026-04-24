@@ -1,11 +1,26 @@
 import json
+import os
 import torch
 
 from pathlib import Path
 from PIL import Image
+from datasets import Dataset as HFDataset
 
 from config.model_config import TinyAyaVisionConfig
 from src.processing import TinyAyaVisionProcessor
+
+
+def _load_json_arrow(json_path: Path, cache_dir: str | None = None) -> HFDataset:
+    """Load a JSON array file into a HuggingFace Arrow-backed Dataset.
+
+    The first call converts JSON → Arrow and caches the result.
+    Subsequent calls memory-map the cached Arrow file — near-zero RAM.
+    """
+    return HFDataset.from_json(
+        str(json_path),
+        cache_dir=cache_dir,
+    )
+
 
 class AlignmentDataset(torch.utils.data.Dataset):
     """
@@ -19,10 +34,10 @@ class AlignmentDataset(torch.utils.data.Dataset):
         data_dir: str = "data/llava-pretrain",
     ):
         self.data_dir = Path(data_dir)
-        print(f"Loading dataset from {self.data_dir / 'blip_laion_cc_sbu_558k.json'}...")
-        with open(self.data_dir / "blip_laion_cc_sbu_558k.json", "r") as f:
-            self.dataset = json.load(f)
-        print(f"Loaded {len(self.dataset)} examples")
+        json_path = self.data_dir / "blip_laion_cc_sbu_558k.json"
+        print(f"Loading dataset from {json_path} (Arrow-backed)...")
+        self.dataset = _load_json_arrow(json_path)
+        print(f"Loaded {len(self.dataset)} examples (memory-mapped)")
         self.processor = TinyAyaVisionProcessor(
             config=config,
         )
@@ -118,19 +133,39 @@ class InstructDataset(torch.utils.data.Dataset):
             )
         json_path = self.data_dir / json_filename
 
-        print(f"Loading dataset from {json_path}...")
-        with open(json_path, "r") as f:
-            self.dataset = json.load(f)
-        # Keep only examples that have an image AND whose image file exists
-        before = len(self.dataset)
-        self.dataset = [
-            x for x in self.dataset
-            if "image" in x and (self.data_dir / x["image"]).exists()
-        ]
+        print(f"Loading dataset from {json_path} (Arrow-backed)...")
+        raw = _load_json_arrow(json_path)
+
+        # Pre-scan directories once to build a set of existing files.
+        # One os.walk is ~1000x faster than 665K individual stat() calls.
+        print("  Scanning image directory for existing files...")
+        existing_files: set[str] = set()
+        data_dir_str = str(self.data_dir)
+        for dirpath, _, filenames in os.walk(self.data_dir):
+            rel_dir = os.path.relpath(dirpath, data_dir_str)
+            for fname in filenames:
+                if rel_dir == ".":
+                    existing_files.add(fname)
+                else:
+                    existing_files.add(os.path.join(rel_dir, fname))
+
+        # Batched filter: avoids per-row Python↔Arrow overhead.
+        # Keep text-only examples (image=None) and image examples whose file exists.
+        before = len(raw)
+        self.dataset = raw.filter(
+            lambda batch: [
+                img is None or img in existing_files
+                for img in batch["image"]
+            ],
+            batched=True,
+            batch_size=10_000,
+            num_proc=4,
+            desc="Checking image files",
+        )
         skipped = before - len(self.dataset)
         if skipped:
             print(f"Skipped {skipped} examples with missing images")
-        print(f"Loaded {len(self.dataset)} examples")
+        print(f"Loaded {len(self.dataset)} examples (memory-mapped)")
 
         self.processor = TinyAyaVisionProcessor(config=config)
         self.max_seq_len = max_seq_len
@@ -207,8 +242,13 @@ class InstructDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         item = self.dataset[idx]
-        image_path = self._resolve_image_path(item["image"])
-        image = Image.open(image_path).convert("RGB")
+        has_image = item["image"] is not None
+
+        if has_image:
+            image_path = self._resolve_image_path(item["image"])
+            image = Image.open(image_path).convert("RGB")
+        else:
+            image = None
 
         messages = self._to_chat_messages(item["conversations"])
 
@@ -219,22 +259,22 @@ class InstructDataset(torch.utils.data.Dataset):
 
         processed = self.processor(
             text=full_text,
-            images=image,
+            images=image if has_image else None,
             truncation=True,
             max_length=self.max_seq_len,
         )
 
         input_ids = processed["input_ids"].squeeze(0)
         attention_mask = processed["attention_mask"].squeeze(0)
-        pixel_values = processed["pixel_values"].squeeze(0)
         labels = self._build_labels(input_ids)
 
-        return {
+        result = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "pixel_values": pixel_values,
+            "pixel_values": processed["pixel_values"].squeeze(0) if has_image else None,
             "labels": labels,
         }
+        return result
 
 
 def collate_fn(
@@ -251,12 +291,15 @@ def collate_fn(
         batch_first=True,
         padding_value=0,
     )
-    # MoonViT: variable tile counts per image → concatenate along dim 0.
-    # SigLIP: fixed-size tensors → stack into a batch.
-    if "image_grid_hws" in batch[0]:
-        pixel_values = torch.cat([item["pixel_values"] for item in batch], dim=0)
+    # Collate pixel_values only for items that have images (skip text-only).
+    image_items = [item for item in batch if item["pixel_values"] is not None]
+    if image_items:
+        if "image_grid_hws" in batch[0]:
+            pixel_values = torch.cat([item["pixel_values"] for item in image_items], dim=0)
+        else:
+            pixel_values = torch.stack([item["pixel_values"] for item in image_items])
     else:
-        pixel_values = torch.stack([item["pixel_values"] for item in batch])
+        pixel_values = None
 
     labels = torch.nn.utils.rnn.pad_sequence(
         [item["labels"] for item in batch],

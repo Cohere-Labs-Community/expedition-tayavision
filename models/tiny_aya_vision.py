@@ -141,7 +141,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
     ) -> torch.Tensor:
         """Replace <image> placeholder tokens with projected vision features.
 
-        For SigLIP: image_features is (B, T, D) — uses masked_scatter directly.
+        For SigLIP: image_features is (B, T, D) — scattered into placeholder positions.
         For MoonViT: image_features is a list of (T_i, D) tensors — concatenated
                      then scattered into the placeholder positions in order.
         """
@@ -156,7 +156,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         n_image_features = flat_features.shape[0]
         if torch.compiler.is_compiling():
             # Inside torch.compile — skip the .item() validation to avoid
-            # graph breaks.  The masked_scatter below will raise if sizes
+            # graph breaks.  The indexing below will raise if sizes
             # are actually mismatched.
             pass
         elif n_image_tokens.item() != n_image_features:
@@ -166,9 +166,13 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
                 f"<image> placeholder tokens for this encoder."
             )
 
-        special_image_mask = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds)
         flat_features = flat_features.to(inputs_embeds.device, inputs_embeds.dtype)
-        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, flat_features)
+        # Use index_put instead of masked_scatter — the latter has a broken
+        # backward kernel under torch.compile / inductor (masked_scatter_backward
+        # produces incorrect shapes).
+        mask_positions = special_image_mask.nonzero(as_tuple=False)
+        inputs_embeds = inputs_embeds.clone()
+        inputs_embeds[mask_positions[:, 0], mask_positions[:, 1]] = flat_features
         return inputs_embeds
 
     def forward(
@@ -194,6 +198,19 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
             inputs_embeds = self._merge_image_features(
                 input_ids, inputs_embeds, image_features
             )
+        elif self.training:
+            # Text-only batch: run a dummy forward through the vision encoder
+            # and projector so their parameters produce gradients and DDP
+            # ALLREDUCE doesn't hang waiting for ranks that had images.
+            img_size = self.config.image_size
+            dummy_pixel = torch.zeros(
+                1, 3, img_size, img_size,
+                device=inputs_embeds.device, dtype=inputs_embeds.dtype,
+            )
+            dummy_feat = self.get_image_features(dummy_pixel)
+            if isinstance(dummy_feat, list):
+                dummy_feat = dummy_feat[0]
+            inputs_embeds = inputs_embeds + (0.0 * dummy_feat.sum())
 
         outputs = self.language_model(
             attention_mask=attention_mask,

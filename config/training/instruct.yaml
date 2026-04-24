@@ -1,25 +1,25 @@
 dataset_name: "liuhaotian/LLaVA-v1.5-mix665k"
-data_dir: "/llava-instruct"
+data_dir: "/data/llava-instruct"
 max_seq_len: 2048
 
 num_epochs: 1
-batch_size: 64
-grad_acc_steps: 32
+batch_size: 128
+grad_acc_steps: 8
 warmup_ratio: 0.03
 learning_rate: 2.0e-5
 weight_decay: 0.0
 lr_scheduler_type: "cosine"
 max_grad_norm: 1.0
-num_workers: 4
+num_workers: 12
 
 torch_dtype: "bfloat16"
 
-models_dir: "/models"
-save_steps: 20
+models_dir: "/data/model_ckpts/instruct_ckpts"
+save_steps: 100
 logging_steps: 10
 seed: 42
 
-alignment_checkpoint: ""
+alignment_checkpoint: "/data/model_ckpts/alignment_ckpts/4d93b48c-941b-4e37-9120-ea89f9fb3ad7/checkpoint_4361.pt"
 
 lora:
   rank: 256
