@@ -1,0 +1,3 @@
+task: maxm_th
+include: _maxm_template.yaml
+test_split: th

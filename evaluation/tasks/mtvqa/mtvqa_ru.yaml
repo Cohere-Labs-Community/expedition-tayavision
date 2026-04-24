@@ -1,0 +1,22 @@
+task: mtvqa_ru
+dataset_path: ByteDance/MTVQA
+dataset_name: null
+test_split: test
+output_type: generate_until
+process_docs: !function utils.process_docs_ru
+doc_to_image: !function utils.mtvqa_doc_to_image
+doc_to_text: !function utils.mtvqa_doc_to_text
+doc_to_target: !function utils.mtvqa_doc_to_target
+process_results: !function utils.mtvqa_process_results
+generation_kwargs:
+  until:
+    - "\n"
+  temperature: 0.0
+  do_sample: false
+  max_gen_toks: 32
+metric_list:
+  - metric: mtvqa_score
+    aggregation: !function utils.mtvqa_aggregation
+    higher_is_better: true
+metadata:
+  version: 1.0

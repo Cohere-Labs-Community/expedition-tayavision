@@ -34,6 +34,7 @@ image = (
     .add_local_dir("models", remote_path="/root/project/models")
     .add_local_dir("pipeline", remote_path="/root/project/pipeline")
     .add_local_dir("tests", remote_path="/root/project/tests")
+    .add_local_dir("scripts", remote_path="/root/project/scripts")
 )
 
 
@@ -47,7 +48,7 @@ def run_tests():
     import subprocess
     import sys
     result = subprocess.run(
-        ["pytest", "-v", "tests/test_vision_encoder.py"],
+        ["pytest", "-v", "tests/test_merge_weights.py"],
         cwd="/root/project",
         capture_output=False
     )

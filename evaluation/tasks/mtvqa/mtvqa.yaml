@@ -1,0 +1,13 @@
+group: mtvqa
+task:
+  - mtvqa_ar
+  - mtvqa_de
+  - mtvqa_fr
+  - mtvqa_it
+  - mtvqa_ja
+  - mtvqa_kr
+  - mtvqa_ru
+  - mtvqa_th
+  - mtvqa_vi
+metadata:
+  version: 1.0

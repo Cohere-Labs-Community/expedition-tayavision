@@ -41,6 +41,7 @@ dependencies = [
     "unsloth>=2024.10.0",
     # Environment
     "python-dotenv>=1.0.1",
+    "modal>=1.3.5",
 ]
 
 [dependency-groups]

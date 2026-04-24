@@ -1,0 +1,21 @@
+task: cvqa_en
+dataset_path: afaji/cvqa
+dataset_name: null
+test_split: test
+output_type: generate_until
+doc_to_image: !function utils.cvqa_doc_to_image
+doc_to_text: !function utils.cvqa_en_doc_to_text
+doc_to_target: !function utils.cvqa_doc_to_target
+process_results: !function utils.cvqa_process_results
+generation_kwargs:
+  until:
+    - "\n"
+  temperature: 0.0
+  do_sample: false
+  max_gen_toks: 16
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

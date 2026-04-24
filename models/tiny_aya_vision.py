@@ -232,6 +232,12 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
             image_hidden_states=torch.cat(image_features, dim=0) if isinstance(image_features, list) else image_features,
         )
 
+    def _prepare_cache_for_generation(self, generation_config, model_kwargs, *args, **kwargs):
+        # Delegate to the language model so it uses the correct cache type (uses hybrid cache)
+        return self.language_model._prepare_cache_for_generation(
+            generation_config, model_kwargs, *args, **kwargs
+        )
+
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -259,9 +265,22 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
             **kwargs,
         )
 
-        if is_first_iteration:
-            model_inputs["pixel_values"] = pixel_values
-            if image_grid_hws is not None:
-                model_inputs["image_grid_hws"] = image_grid_hws
+        # Merge image features into embeddings before the LM trims input_ids
+        # forward() can't locate <image> positions after trimming so its done here
+        
+        # cache_position[0] == 0 identifies the first generation step.
+        is_first_step = cache_position is None or int(cache_position[0]) == 0
+        if (
+            is_first_step
+            and pixel_values is not None
+            and input_ids is not None
+            and (input_ids == self.image_token_id).any()
+        ):
+            word_embeds = self.get_input_embeddings()(input_ids)
+            image_features = self.get_image_features(pixel_values, image_grid_hws)
+            merged_embeds = self._merge_image_features(input_ids, word_embeds, image_features)
+            model_inputs["inputs_embeds"] = merged_embeds
+            model_inputs.pop("input_ids", None)
+            # pixel_values already merged
 
         return model_inputs

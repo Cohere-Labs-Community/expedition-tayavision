@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import gc
 from pathlib import Path
 from typing import Dict
 
@@ -58,6 +59,25 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 LLM_PREFIX = "language_model."
 PROJECTOR_PREFIX = "multi_modal_projector."
+
+# Weight-tying keys: safetensors deduplication may drop one side of a tied
+# pair.  We restore it so that both the original and fine-tuned state dicts
+# always present the same key set to lerp_state_dicts.
+_TIED_PAIRS = [
+    # (source_key, tied_key) — source is kept by safetensors, tied is dropped
+    ("language_model.model.embed_tokens.weight", "language_model.lm_head.weight"),
+]
+
+
+def _restore_tied_weights(state: Dict[str, torch.Tensor]) -> None:
+    """Restore weight-tied keys that safetensors deduplication may have dropped.
+
+    Mutates *state* in-place.  Only acts when the source key is present and
+    the tied key is absent — never overwrites an existing key.
+    """
+    for src_key, tied_key in _TIED_PAIRS:
+        if src_key in state and tied_key not in state:
+            state[tied_key] = state[src_key]
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +271,7 @@ def _load_original_llm(model_name: str, device: str, dtype: torch.dtype) -> Dict
     return state
 
 
-def _load_finetuned_vlm(checkpoint_path: str, device: str) -> Dict[str, torch.Tensor]:
+def _load_finetuned_vlm(checkpoint_path: str, device: str, token: str = "") -> Dict[str, torch.Tensor]:
     """Load a fine-tuned VLM state dict from a HuggingFace Hub ID, a local HF
     model directory, or a raw ``.pt`` / ``.safetensors`` checkpoint file.
 
@@ -285,16 +305,71 @@ def _load_finetuned_vlm(checkpoint_path: str, device: str) -> Dict[str, torch.Te
             "Loading fine-tuned VLM via AutoModel.from_pretrained('%s') …",
             checkpoint_path,
         )
-        model = AutoModel.from_pretrained(
-            checkpoint_path,
-            torch_dtype=torch.float32,
-            device_map=device,
-            trust_remote_code=True,  # needed for custom architectures
-        )
-        state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
-        del model
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        try:
+            kwargs = {"torch_dtype": torch.float32, "trust_remote_code": True}
+            if token:
+                kwargs["token"] = token
+            if device != "cpu":
+                kwargs["device_map"] = device
+                kwargs["low_cpu_mem_usage"] = True
+
+            model = AutoModel.from_pretrained(checkpoint_path, **kwargs)
+            state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+            del model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            _restore_tied_weights(state)
+            return state
+
+        except (ValueError, OSError) as exc:
+            # Custom architecture not registered in transformers -- download raw
+            # weight files and load them directly (bypasses model class lookup).
+            if (
+                "model_type" not in str(exc)
+                and "Unrecognized" not in str(exc)
+                and "does not recognize this architecture" not in str(exc)
+            ):
+                raise
+            log.warning(
+                "AutoModel could not instantiate '%s' (%s). "
+                "Falling back to raw weight download via snapshot_download ...",
+                checkpoint_path, exc,
+            )
+
+        from huggingface_hub import snapshot_download  # lazy import
+        snap_kwargs = {}
+        if token:
+            snap_kwargs["token"] = token
+        local_dir = Path(snapshot_download(checkpoint_path, **snap_kwargs))
+        log.info("Snapshot downloaded to '%s'", local_dir)
+
+        # Prefer safetensors shards, then .bin/.pt files
+        safetensor_shards = sorted(local_dir.glob("*.safetensors"))
+        if safetensor_shards:
+            from safetensors.torch import load_file
+            state: Dict[str, torch.Tensor] = {}
+            for shard in safetensor_shards:
+                log.info("  Loading shard: %s", shard.name)
+                state.update(load_file(str(shard), device=device))
+        else:
+            bin_files = sorted(local_dir.glob("*.bin")) + sorted(local_dir.glob("*.pt"))
+            if not bin_files:
+                raise FileNotFoundError(
+                    f"No .safetensors / .bin / .pt weight files found in '{local_dir}'."
+                )
+            state = {}
+            for bf in bin_files:
+                log.info("  Loading: %s", bf.name)
+                chunk = torch.load(str(bf), map_location=device, weights_only=True)
+                if isinstance(chunk, dict) and "state_dict" in chunk:
+                    chunk = chunk["state_dict"]
+                if isinstance(chunk, dict) and "model" in chunk:
+                    chunk = chunk["model"]
+                state.update(chunk)
+
+        state = {k: v.detach().cpu() for k, v in state.items()}
+        _restore_tied_weights(state)
         return state
 
     # ------------------------------------------------------------------ #
@@ -333,7 +408,9 @@ def _load_finetuned_vlm(checkpoint_path: str, device: str) -> Dict[str, torch.Te
     if isinstance(state, dict) and "model" in state:
         state = state["model"]
 
-    return {k: v.detach().cpu() for k, v in state.items()}
+    state = {k: v.detach().cpu() for k, v in state.items()}
+    _restore_tied_weights(state)
+    return state
 
 
 def _save_outputs(

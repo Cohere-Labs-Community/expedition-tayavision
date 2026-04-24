@@ -21,7 +21,7 @@ def main():
     parser = argparse.ArgumentParser(description="lm-eval runner for Tiny Aya Vision benchmarks.")
     parser.add_argument("--task", type=str, required=True)
     parser.add_argument("--model-name", type=str, required=True)
-    parser.add_argument("--backend", type=str, default="hf-multimodal", choices=["vllm", "hf", "hf-multimodal"])
+    parser.add_argument("--backend", type=str, default="hf-multimodal", choices=["vllm", "hf", "hf-multimodal", "tiny-aya-vision"])
     parser.add_argument("--batch-size", type=str, default="1")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output-dir", type=str, default="evaluation/results")

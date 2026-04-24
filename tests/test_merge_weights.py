@@ -16,6 +16,7 @@ import torch
 from scripts.merge_weights import (  # noqa: E402
     LLM_PREFIX,
     PROJECTOR_PREFIX,
+    _restore_tied_weights,
     build_merged_vlm_state,
     extract_llm_state_dict,
     extract_non_llm_state_dict,
@@ -233,6 +234,37 @@ class TestBuildMergedVlmState:
         assert f"{LLM_PREFIX}lm_head.weight" not in merged
         # embed_tokens.weight must be present and LERP'd
         assert f"{LLM_PREFIX}model.embed_tokens.weight" in merged
+
+
+# ---------------------------------------------------------------------------
+# _restore_tied_weights
+# ---------------------------------------------------------------------------
+
+class TestRestoreTiedWeights:
+    def test_restores_lm_head_from_embed_tokens(self):
+        """lm_head.weight is restored when embed_tokens.weight is present."""
+        embed = torch.randn(4, 4)
+        state = {"language_model.model.embed_tokens.weight": embed}
+        _restore_tied_weights(state)
+        assert "language_model.lm_head.weight" in state
+        assert torch.equal(state["language_model.lm_head.weight"], embed)
+
+    def test_no_op_when_both_present(self):
+        """Does not overwrite lm_head.weight when it already exists."""
+        embed = torch.randn(4, 4)
+        head = torch.randn(4, 4)
+        state = {
+            "language_model.model.embed_tokens.weight": embed,
+            "language_model.lm_head.weight": head,
+        }
+        _restore_tied_weights(state)
+        assert torch.equal(state["language_model.lm_head.weight"], head)
+
+    def test_no_op_when_source_missing(self):
+        """Does nothing when embed_tokens.weight is absent."""
+        state = {"some_other_key": torch.randn(4, 4)}
+        _restore_tied_weights(state)
+        assert "language_model.lm_head.weight" not in state
 
 # ---------------------------------------------------------------------------
 # Output file written to disk

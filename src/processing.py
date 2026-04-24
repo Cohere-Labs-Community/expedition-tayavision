@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 from PIL import Image
 from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer, ProcessorMixin
+from transformers.feature_extraction_utils import BatchFeature
 
 from config.model_config import TinyAyaVisionConfig
 
@@ -185,8 +186,9 @@ class TinyAyaVisionProcessor(ProcessorMixin):
         truncation: bool = False,
         max_length: "int | None" = None,
         add_generation_prompt: bool = True,
-        tokenize: bool = True,
+        tokenize: bool = False,
         return_tensors: str = "pt",
+        **kwargs,
     ) -> "dict[str, torch.Tensor] | str":
         """Format structured chat messages into model inputs.
 
@@ -219,10 +221,14 @@ class TinyAyaVisionProcessor(ProcessorMixin):
             ``attention_mask``, and optionally ``pixel_values``.
             If *tokenize* is ``False``: the formatted text string.
         """
+        # continue_final_message and add_generation_prompt are mutually exclusive
+        if kwargs.get("continue_final_message"):
+            add_generation_prompt = False
         text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
+            **kwargs,
         )
 
         if not tokenize:
@@ -236,6 +242,7 @@ class TinyAyaVisionProcessor(ProcessorMixin):
             max_length=max_length,
             return_tensors=return_tensors,
         )
+
     def _tokens_per_image(self, image_grid_hws: torch.Tensor | None, n_images: int) -> list[int]:
         """Compute how many <image> tokens each image expands to.
 
@@ -292,6 +299,9 @@ class TinyAyaVisionProcessor(ProcessorMixin):
         if images is not None:
             if isinstance(images, Image.Image):
                 images = [images]
+            # lm-eval passes images as a list-of-lists [[img], [img], ...] -> flatten to [img, img, ...]
+            elif images and isinstance(images[0], list):
+                images = [img for sublist in images for img in sublist]
             image_inputs = self.image_processor(images=images, return_tensors=return_tensors)
             result["pixel_values"] = image_inputs["pixel_values"]
             if "image_grid_hws" in image_inputs:
@@ -320,4 +330,4 @@ class TinyAyaVisionProcessor(ProcessorMixin):
         )
         result.update(text_inputs)
 
-        return result
+        return BatchFeature(result)

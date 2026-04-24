@@ -50,6 +50,17 @@ def cvqa_process_results(doc, results):
     return {"exact_match": float(pred == gold)}
 
 
+# CVQA English translated task — uses English-translated questions and options for all samples
+def cvqa_en_doc_to_text(doc):
+    question = doc["Translated Question"]
+    options = doc["Translated Options"]
+    options_str = "\n".join(f"{OPTION_LETTERS[i]}. {opt}" for i, opt in enumerate(options))
+    return (
+        f"<image>\n{question}\n{options_str}\n"
+        "Answer with the option letter (A, B, C, or D)."
+    )
+
+
 # CVQA blind baseline utils
 def cvqa_blind_doc_to_text(doc):
     return f"Question: {doc['Question']}\nAnswer:"

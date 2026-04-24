@@ -1,0 +1,11 @@
+group: maxm
+task:
+  - maxm_en
+  - maxm_fr
+  - maxm_hi
+  - maxm_th
+  - maxm_zh
+  - maxm_iw
+  - maxm_ro
+metadata:
+  version: 1.0

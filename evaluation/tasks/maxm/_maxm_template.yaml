@@ -1,0 +1,19 @@
+dataset_path: neulab/PangeaBench-maxm
+dataset_name: null
+output_type: generate_until
+doc_to_image: !function utils.maxm_doc_to_image
+doc_to_text: !function utils.maxm_doc_to_text
+doc_to_target: !function utils.maxm_doc_to_target
+process_results: !function utils.maxm_process_results
+generation_kwargs:
+  until:
+    - "\n"
+  temperature: 0.0
+  do_sample: false
+  max_gen_toks: 32
+metric_list:
+  - metric: vqa_score
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0
