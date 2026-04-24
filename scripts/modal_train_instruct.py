@@ -103,12 +103,15 @@ def train(
     if weight_decay is not None:
         training_config.weight_decay = weight_decay
 
-    main(
-        training_config=training_config,
-        model_config=model_config,
-        lora_config=lora_config,
-        resume_run_id=resume_run_id,
-    )
+    try:
+        main(
+            training_config=training_config,
+            model_config=model_config,
+            lora_config=lora_config,
+            resume_run_id=resume_run_id,
+        )
+    finally:
+        models_volume.commit()
 
 
 @app.local_entrypoint()

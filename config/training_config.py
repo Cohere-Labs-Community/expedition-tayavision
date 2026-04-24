@@ -44,3 +44,6 @@ class InstructConfig(AlignmentConfig):
 
     # Path to alignment checkpoint (.pt) to initialise the projector from
     alignment_checkpoint: str = ""
+
+    # Save checkpoints spread across training.
+    save_steps: int = 50
