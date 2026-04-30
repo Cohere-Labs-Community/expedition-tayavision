@@ -24,6 +24,13 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
+def _model_output_slug(model_name: str, model_subfolder: str | None = None) -> str:
+    slug = model_name.replace("/", "__")
+    if model_subfolder:
+        slug += "__" + model_subfolder.strip("/").replace("/", "__")
+    return slug
+
+
 def _resolve_task_sample_count(task_manager, task_name: str) -> tuple[str, int]:
     """Return the concrete lm-eval task name and eval split length.
 
@@ -77,6 +84,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--chunk-size", type=int, default=None, help="Max samples per inference pass; iterates all chunks automatically")
     parser.add_argument("--output-dir", type=str, default="evaluation/results")
+    parser.add_argument("--model-subfolder", type=str, default=None, help="Optional HF Hub subfolder to load from inside --model-name")
     parser.add_argument("--log-samples", action="store_true", help="Log per-question results")
     parser.add_argument("--apply-chat-template", action="store_true", help="Apply chat template")
     parser.add_argument("--skip-registration", action="store_true", help="Skip TinyAyaVision Auto class registration (use for external baseline models)")
@@ -88,6 +96,8 @@ def main():
     logger.info(f"Starting evaluation for task: {args.task}")
     logger.info(f"Backend: {args.backend}")
     logger.info(f"Model: {args.model_name}")
+    if args.model_subfolder:
+        logger.info(f"Model subfolder: {args.model_subfolder}")
     logger.info(f"=========================================")
 
     # Register TinyAyaVision with HuggingFace Auto classes so lm-eval can
@@ -103,6 +113,8 @@ def main():
     import lm_eval.tasks
 
     model_args = f"pretrained={args.model_name},dtype={args.dtype},trust_remote_code={args.trust_remote_code}"
+    if args.model_subfolder:
+        model_args += f",subfolder={args.model_subfolder}"
     if args.backend == "vllm":
         model_args += ",tensor_parallel_size=1"
 
@@ -143,7 +155,7 @@ def main():
         import json as _json2
         from pathlib import Path as _Path
 
-        model_name_sanitized = args.model_name.replace("/", "__")
+        model_name_sanitized = _model_output_slug(args.model_name, args.model_subfolder)
         chunk_suffix = f"_limit{args.limit}" if args.limit is not None else ""
         chunk_output_dir = (
             _Path(args.output_dir)
@@ -267,7 +279,7 @@ def main():
         from pathlib import Path
 
         # Store results under output_dir/model_name/
-        model_name_sanitized = args.model_name.replace("/", "__")
+        model_name_sanitized = _model_output_slug(args.model_name, args.model_subfolder)
         output_path = Path(args.output_dir) / model_name_sanitized
         output_path.mkdir(parents=True, exist_ok=True)
 

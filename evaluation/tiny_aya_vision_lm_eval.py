@@ -49,12 +49,14 @@ class TinyAyaVisionLM(HFMultimodalLM):
     def _create_model(self, pretrained, revision="main", dtype="auto", trust_remote_code=False, **kwargs):
         from transformers import AutoModelForCausalLM
         cache_dir = kwargs.get("cache_dir") or None
+        subfolder = kwargs.get("subfolder") or ""
         self._model = AutoModelForCausalLM.from_pretrained(
             pretrained,
             revision=revision,
             dtype=dtype,
             trust_remote_code=trust_remote_code,
             cache_dir=cache_dir,
+            subfolder=subfolder,
             device_map="auto",
         )
 
@@ -67,6 +69,7 @@ class TinyAyaVisionLM(HFMultimodalLM):
         **kwargs,
     ):
         cache_dir = kwargs.get("cache_dir") or None
+        subfolder = kwargs.get("subfolder") or ""
 
         # Prefer processor/tokenizer files from the same HF repo/local model
         # directory. Transformers will download missing files into the normal
@@ -78,6 +81,7 @@ class TinyAyaVisionLM(HFMultimodalLM):
                 revision=revision,
                 trust_remote_code=trust_remote_code,
                 cache_dir=cache_dir,
+                subfolder=subfolder,
             )
             self.tokenizer = self.processor.tokenizer
             return
@@ -92,6 +96,7 @@ class TinyAyaVisionLM(HFMultimodalLM):
             revision=revision,
             trust_remote_code=trust_remote_code,
             cache_dir=cache_dir,
+            subfolder=subfolder,
         )
         vlm_config.cache_dir = cache_dir
         self.processor = TinyAyaVisionProcessor(vlm_config)
