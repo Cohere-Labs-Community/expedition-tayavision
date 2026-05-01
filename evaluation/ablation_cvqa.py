@@ -10,6 +10,8 @@ Usage:
     python evaluation/ablation_cvqa.py \
         --multilingual <path/to/samples.jsonl> \
         --english-only <path/to/samples.jsonl> \
+        [--multilingual-label "Multilingual IFT"] \
+        [--english-only-label "TayaVision Instruct 665K"] \
         [--qwen <path/to/samples.jsonl>] \
         [--model "Label=<path/to/samples.jsonl>"] \
         [--output-dir evaluation/ablation_figures]
@@ -219,6 +221,9 @@ def main():
     parser.add_argument("--multilingual", required=True, help="Path to multilingual model samples JSONL")
     parser.add_argument("--english-only", required=True, help="Path to english-only model samples JSONL")
     parser.add_argument("--qwen", default=None, help="Optional path to Qwen model samples JSONL")
+    parser.add_argument("--multilingual-label", default="Multilingual IFT", help="Display label for --multilingual")
+    parser.add_argument("--english-only-label", default="English-only IFT", help="Display label for --english-only")
+    parser.add_argument("--qwen-label", default="Qwen3-VL-4B-Instruct", help="Display label for --qwen")
     parser.add_argument(
         "--model",
         action="append",
@@ -236,11 +241,11 @@ def main():
     args = parser.parse_args()
 
     model_paths = [
-        ("Multilingual IFT", args.multilingual),
-        ("English-only IFT", args.english_only),
+        (args.multilingual_label, args.multilingual),
+        (args.english_only_label, args.english_only),
     ]
     if args.qwen:
-        add_model(model_paths, "Qwen3-VL-4B-Instruct", args.qwen)
+        add_model(model_paths, args.qwen_label, args.qwen)
     if not args.no_default_latest:
         for label, path in DEFAULT_LATEST_RESULTS:
             if Path(path).exists():
