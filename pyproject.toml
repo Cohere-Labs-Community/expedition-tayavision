@@ -9,7 +9,7 @@ dependencies = [
     "torch>=2.2.0",
     "torchvision>=0.17.0",
     # HuggingFace ecosystem
-    "transformers>=4.49.0",
+    "transformers>=5.7.0",
     "datasets>=3.0.0",
     "accelerate>=1.0.0",
     "huggingface_hub>=0.27.0",

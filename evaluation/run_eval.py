@@ -91,6 +91,7 @@ def main():
     parser.add_argument("--dtype", type=str, default="bfloat16", help="Model dtype (bfloat16, float16, auto, etc.)")
     parser.add_argument("--trust-remote-code", action="store_true", default=True, help="Pass trust_remote_code=True to model loader")
     parser.add_argument("--no-trust-remote-code", dest="trust_remote_code", action="store_false")
+    parser.add_argument("--extra-model-args", type=str, default=None, help="Extra key=value pairs appended to model_args (e.g. 'attn_implementation=eager,device_map=cpu,max_length=131072')")
     args = parser.parse_args()
 
     logger.info(f"Starting evaluation for task: {args.task}")
@@ -117,6 +118,8 @@ def main():
         model_args += f",subfolder={args.model_subfolder}"
     if args.backend == "vllm":
         model_args += ",tensor_parallel_size=1"
+    if args.extra_model_args:
+        model_args += f",{args.extra_model_args}"
 
     task_manager = lm_eval.tasks.TaskManager(include_path="evaluation/tasks")
 
@@ -213,6 +216,12 @@ def main():
                 for s in chunk_samples:
                     _f.write(_json2.dumps(s, default=str, ensure_ascii=False) + "\n")
 
+            # Prevent memory bloat by clearing chunk_results after saving; 
+            # the next chunk will recreate it without data loss.
+            import gc
+            del chunk_results
+            gc.collect()
+
             for s in chunk_samples:
                 for k, v in s.items():
                     if isinstance(v, (int, float)) and k != "doc_id":
@@ -276,7 +285,6 @@ def main():
 
     if args.output_dir:
         import json
-        from pathlib import Path
 
         # Store results under output_dir/model_name/
         model_name_sanitized = _model_output_slug(args.model_name, args.model_subfolder)
