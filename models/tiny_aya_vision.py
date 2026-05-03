@@ -38,8 +38,8 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
     _no_split_modules = ["SigLIPVisionEncoder", "MoonViTVisionEncoder"]
     _tied_weights_keys = {"language_model.lm_head.weight": "language_model.model.embed_tokens.weight"}
 
-    def __init__(self, config: TinyAyaVisionConfig):
-        super().__init__(config)
+    def __init__(self, config: TinyAyaVisionConfig, **kwargs):
+        super().__init__(config, **kwargs)
 
         self.vision_encoder = create_vision_encoder(config)
         if config.vision_tower_config is None:

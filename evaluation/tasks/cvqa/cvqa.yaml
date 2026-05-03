@@ -1,6 +1,5 @@
 task: cvqa
-dataset_path: afaji/cvqa
-dataset_name: null
+custom_dataset: !function utils.load_cvqa
 test_split: test
 output_type: generate_until
 doc_to_image: !function utils.cvqa_doc_to_image

@@ -281,8 +281,8 @@ class TestOutputFile:
                 merged_state=state,
                 output_dir=Path(tmpdir),
                 dtype=torch.float32,
-                save_hf=False,
-                original_llm_name="",  # not used when save_hf=False
+                finetuned_vlm_name=None,
+                save_model=False,
             )
             saved = torch.load(Path(tmpdir) / "merged_state.pt", weights_only=True)
 
@@ -299,8 +299,8 @@ class TestOutputFile:
                 merged_state=state,
                 output_dir=Path(tmpdir),
                 dtype=torch.float16,
-                save_hf=False,
-                original_llm_name="",
+                finetuned_vlm_name=None,
+                save_model=False,
             )
             saved = torch.load(Path(tmpdir) / "merged_state.pt", weights_only=True)
 
@@ -322,7 +322,7 @@ class TestParseArgs:
         ])
         assert args.original == "some/model"
         assert args.finetuned == "some/checkpoint"
-        assert args.alpha == 0.5
+        assert args.alpha == "0.5"
         assert args.output == "some/output"
 
     def test_default_dtype_is_bfloat16(self):
@@ -339,12 +339,12 @@ class TestParseArgs:
         ])
         assert args.device == "cpu"
 
-    def test_save_hf_defaults_to_false(self):
+    def test_hub_repo_id_defaults_to_none(self):
         args = parse_args([
             "--original", "x", "--finetuned", "x",
             "--alpha", "0.5", "--output", "x",
         ])
-        assert args.save_hf is False
+        assert args.hub_repo_id is None
 
     def test_alpha_in_sweep_range(self):
         """All recommended sweep values should parse correctly."""
@@ -353,5 +353,4 @@ class TestParseArgs:
                 "--original", "x", "--finetuned", "x",
                 "--alpha", alpha_val, "--output", "x",
             ])
-            assert args.alpha == float(alpha_val)
-
+            assert args.alpha == alpha_val
