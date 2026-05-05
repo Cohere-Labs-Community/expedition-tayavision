@@ -125,7 +125,7 @@ class InstructDataset(torch.utils.data.Dataset):
         before = len(self.dataset)
         self.dataset = [
             x for x in self.dataset
-            if "image" in x and (self.data_dir / x["image"]).exists()
+            if "image" in x and self._resolve_image_path(x["image"]).exists()
         ]
         skipped = before - len(self.dataset)
         if skipped:
