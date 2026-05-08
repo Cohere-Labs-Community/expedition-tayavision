@@ -1,0 +1,20 @@
+group: kaleidoscope
+task:
+  - kaleidoscope_ar
+  - kaleidoscope_bn
+  - kaleidoscope_de
+  - kaleidoscope_en
+  - kaleidoscope_es
+  - kaleidoscope_fa
+  - kaleidoscope_fr
+  - kaleidoscope_hi
+  - kaleidoscope_hr
+  - kaleidoscope_hu
+  - kaleidoscope_lt
+  - kaleidoscope_ne
+  - kaleidoscope_nl
+  - kaleidoscope_pt
+  - kaleidoscope_ru
+  - kaleidoscope_sr
+  - kaleidoscope_te
+  - kaleidoscope_uk
