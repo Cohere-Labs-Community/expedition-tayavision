@@ -15,6 +15,8 @@ Launch:
 
 import json
 import os
+import re
+import signal
 import sys
 import uuid
 from contextlib import nullcontext
@@ -189,6 +191,16 @@ def train(
     lora_params = [p for p in raw.language_model.parameters() if p.requires_grad]
     all_trainable_params = projector_params + lora_params
 
+    # SIGTERM handler for preemption recovery (Modal spot instances send SIGTERM before eviction).
+    # current_step is a one-element list so the nested handler can mutate it via closure.
+    current_step = [step_offset]
+    if is_main:
+        def _sigterm_handler(signum, frame):
+            tqdm.write(f"SIGTERM received — saving emergency checkpoint at step {current_step[0]}")
+            save_checkpoint(checkpoint_dir, current_step[0], model, optimizer, lr_scheduler)
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, _sigterm_handler)
+
     for epoch in range(training_config.num_epochs):
         if sampler is not None:
             sampler.set_epoch(epoch)
@@ -239,6 +251,7 @@ def train(
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
+                current_step[0] = step + 1
 
                 opt_step = (step + 1) // training_config.grad_acc_steps
 
