@@ -10,11 +10,24 @@ Fields:
     Label: int (0-3, index of correct option)
 """
 
+from datasets import DatasetDict, load_dataset
+
 OPTION_LETTERS = ["A", "B", "C", "D"]
 
 
+def load_cvqa(cvqa_chunk_start=None, cvqa_chunk_end=None, **kwargs):
+    """Load CVQA from Hugging Face datasets, optionally sliced for chunked eval."""
+    has_chunk_bounds = cvqa_chunk_start is not None and cvqa_chunk_end is not None
+    split = (
+        f"test[{cvqa_chunk_start}:{cvqa_chunk_end}]"
+        if has_chunk_bounds
+        else "test"
+    )
+    return DatasetDict({"test": load_dataset("afaji/cvqa", split=split)})
+
+
 def cvqa_doc_to_image(doc):
-    """Extract image(s) from dataset sample."""
+    """Return the image loaded by Hugging Face datasets."""
     return [doc["image"]]
 
 

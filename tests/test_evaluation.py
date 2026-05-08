@@ -88,6 +88,24 @@ class TestCVQATask:
         score = cvqa_process_results(doc, results)
         assert score["exact_match"] == 0.0
 
+    def test_load_cvqa_uses_metadata_chunk_bounds(self, monkeypatch):
+        """CVQA custom dataset loader slices using lm-eval metadata."""
+        from datasets import Dataset
+        from evaluation.tasks.cvqa import utils
+
+        requested_splits = []
+
+        def fake_load_dataset(path, split):
+            requested_splits.append((path, split))
+            return Dataset.from_list([])
+
+        monkeypatch.setattr(utils, "load_dataset", fake_load_dataset)
+
+        ds = utils.load_cvqa(cvqa_chunk_start=10, cvqa_chunk_end=20)
+
+        assert "test" in ds
+        assert requested_splits == [("afaji/cvqa", "test[10:20]")]
+
 
 class TestXMMMUTask:
     """Tests for the xMMMU lm-eval task configuration."""

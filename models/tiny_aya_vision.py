@@ -38,8 +38,8 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
     _no_split_modules = ["SigLIPVisionEncoder", "MoonViTVisionEncoder"]
     _tied_weights_keys = {"language_model.lm_head.weight": "language_model.model.embed_tokens.weight"}
 
-    def __init__(self, config: TinyAyaVisionConfig):
-        super().__init__(config)
+    def __init__(self, config: TinyAyaVisionConfig, **kwargs):
+        super().__init__(config, **kwargs)
 
         self.vision_encoder = create_vision_encoder(config)
         if config.vision_tower_config is None:
@@ -141,7 +141,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
     ) -> torch.Tensor:
         """Replace <image> placeholder tokens with projected vision features.
 
-        For SigLIP: image_features is (B, T, D) — uses masked_scatter directly.
+        For SigLIP: image_features is (B, T, D) — scattered into placeholder positions.
         For MoonViT: image_features is a list of (T_i, D) tensors — concatenated
                      then scattered into the placeholder positions in order.
         """
@@ -156,7 +156,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         n_image_features = flat_features.shape[0]
         if torch.compiler.is_compiling():
             # Inside torch.compile — skip the .item() validation to avoid
-            # graph breaks.  The masked_scatter below will raise if sizes
+            # graph breaks.  The indexing below will raise if sizes
             # are actually mismatched.
             pass
         elif n_image_tokens.item() != n_image_features:
@@ -166,9 +166,13 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
                 f"<image> placeholder tokens for this encoder."
             )
 
-        special_image_mask = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds)
         flat_features = flat_features.to(inputs_embeds.device, inputs_embeds.dtype)
-        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, flat_features)
+        # Use index_put instead of masked_scatter — the latter has a broken
+        # backward kernel under torch.compile / inductor (masked_scatter_backward
+        # produces incorrect shapes).
+        mask_positions = special_image_mask.nonzero(as_tuple=False)
+        inputs_embeds = inputs_embeds.clone()
+        inputs_embeds[mask_positions[:, 0], mask_positions[:, 1]] = flat_features
         return inputs_embeds
 
     def forward(
@@ -194,6 +198,19 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
             inputs_embeds = self._merge_image_features(
                 input_ids, inputs_embeds, image_features
             )
+        elif self.training:
+            # Text-only batch: run a dummy forward through the vision encoder
+            # and projector so their parameters produce gradients and DDP
+            # ALLREDUCE doesn't hang waiting for ranks that had images.
+            img_size = self.config.image_size
+            dummy_pixel = torch.zeros(
+                1, 3, img_size, img_size,
+                device=inputs_embeds.device, dtype=inputs_embeds.dtype,
+            )
+            dummy_feat = self.get_image_features(dummy_pixel)
+            if isinstance(dummy_feat, list):
+                dummy_feat = dummy_feat[0]
+            inputs_embeds = inputs_embeds + (0.0 * dummy_feat.sum())
 
         outputs = self.language_model(
             attention_mask=attention_mask,
@@ -216,10 +233,16 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         )
 
     def _prepare_cache_for_generation(self, generation_config, model_kwargs, *args, **kwargs):
-        # Delegate to the language model so it uses the correct cache type (uses hybrid cache)
-        return self.language_model._prepare_cache_for_generation(
-            generation_config, model_kwargs, *args, **kwargs
+        # Force DynamicCache instead of the HybridCache that Cohere2 normally
+        # uses. HybridCache triggers a static-cache compilation path inside
+        # generate() that is incompatible with the VLM wrapper's image-merging
+        # logic, causing an infinite hang during prefill.
+        from transformers import DynamicCache
+
+        model_kwargs["past_key_values"] = DynamicCache(
+            config=self.config.get_text_config(decoder=True)
         )
+        return model_kwargs
 
     def prepare_inputs_for_generation(
         self,
@@ -251,8 +274,13 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         # Merge image features into embeddings before the LM trims input_ids
         # forward() can't locate <image> positions after trimming so its done here
         
-        # cache_position[0] == 0 identifies the first generation step.
-        is_first_step = cache_position is None or int(cache_position[0]) == 0
+        is_first_step = bool(is_first_iteration)
+        if not is_first_step and past_key_values is None:
+            is_first_step = True
+        if not is_first_step and cache_position is not None and cache_position.numel() > 0:
+            is_first_step = int(cache_position[0]) == 0
+        if not is_first_step and past_key_values is not None and hasattr(past_key_values, "get_seq_length"):
+            is_first_step = past_key_values.get_seq_length() == 0
         if (
             is_first_step
             and pixel_values is not None

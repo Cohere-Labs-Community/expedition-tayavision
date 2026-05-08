@@ -15,7 +15,6 @@ Launch:
 
 import json
 import os
-import re
 import sys
 import uuid
 from dataclasses import asdict
@@ -40,56 +39,16 @@ from config.training_config import AlignmentConfig
 from config.model_config import TinyAyaVisionConfig
 from models.tiny_aya_vision import TinyAyaVisionForConditionalGeneration
 from pipeline.data import AlignmentDataset, collate_fn
+from pipeline.utils import (
+    is_torchrun,
+    setup_ddp,
+    cleanup_ddp,
+    _unwrap_model,
+    save_checkpoint,
+    find_latest_checkpoint,
+    build_lr_scheduler,
+)
 from src.processing import TinyAyaVisionProcessor
-
-
-def is_torchrun() -> bool:
-    """True when launched via torchrun / torch.distributed.launch."""
-    return "LOCAL_RANK" in os.environ
-
-
-def setup_ddp():
-    """Initialize distributed process group and set CUDA device."""
-    local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group(backend="nccl", device_id=torch.device(f"cuda:{local_rank}"))
-    return local_rank
-
-
-def cleanup_ddp():
-    if dist.is_initialized():
-        dist.destroy_process_group()
-
-
-def _unwrap_model(model):
-    """Unwrap torch.compile and DDP wrappers to access the raw module."""
-    raw = model
-    if hasattr(raw, "_orig_mod"):    # torch.compile
-        raw = raw._orig_mod
-    if hasattr(raw, "module"):       # DDP
-        raw = raw.module
-    return raw
-
-def save_checkpoint(checkpoint_dir, step, model, optimizer, lr_scheduler):
-    save_path = checkpoint_dir / f"checkpoint_{step}.pt"
-    raw_model = _unwrap_model(model)
-    torch.save({
-        "step": step,
-        "projector": raw_model.multi_modal_projector.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "lr_scheduler": lr_scheduler.state_dict(),
-    }, save_path)
-    print(f"Saved checkpoint to {save_path}")
-
-
-def find_latest_checkpoint(checkpoint_dir: Path) -> Path | None:
-    checkpoints = list(checkpoint_dir.glob("checkpoint_*.pt"))
-    if not checkpoints:
-        return None
-    def extract_step(p):
-        m = re.search(r"checkpoint_(\d+)\.pt$", p.name)
-        return int(m.group(1)) if m else -1
-    return max(checkpoints, key=extract_step)
 
 
 @torch.no_grad()
@@ -500,22 +459,7 @@ def run(cfg: DictConfig):
         weight_decay=training_config.weight_decay,
     )
 
-    full_loader_len = full_dataset_len // (per_gpu_batch_size * world_size)
-    total_steps = training_config.num_epochs * full_loader_len // training_config.grad_acc_steps
-    warmup_steps = int(total_steps * training_config.warmup_ratio)
-
-    if training_config.lr_scheduler_type == "cosine":
-        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-            opt, start_factor=1e-8 / training_config.learning_rate, total_iters=warmup_steps,
-        )
-        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=total_steps - warmup_steps, eta_min=training_config.learning_rate * 0.01,
-        )
-        lr_scheduler = torch.optim.lr_scheduler.SequentialLR(
-            opt, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_steps],
-        )
-    else:
-        raise ValueError(f"Unsupported LR scheduler type: {training_config.lr_scheduler_type}")
+    lr_scheduler = build_lr_scheduler(opt, training_config, full_dataset_len, per_gpu_batch_size, world_size)
 
     if resume_step > 0:
         opt.load_state_dict(ckpt["optimizer"])

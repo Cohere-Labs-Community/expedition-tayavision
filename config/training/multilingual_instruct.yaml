@@ -1,0 +1,238 @@
+# Multilingual multimodal instruction-tuning config
+# Target: UNIFORM distribution of ~15K samples per language across all 67 Tiny Aya languages
+#
+# DATA SOURCES (9 total):
+#   Tier 1a — PangeaIns (multimodal, 39 langs, primary high-quality source)
+#   Tier 1b — WIT/Wikipedia Image Text (multimodal, 105 langs, massive scale for European+)
+#   Tier 1c — ALM-Bench (multimodal VQA, 100 langs, culturally diverse)
+#   Tier 1d — MVL-SIB (multimodal VQA, 197 langs, covers km + wo)
+#   Tier 1e — bloom-captioning (multimodal caption, 400+ langs, low-resource African/SE Asian)
+#   Tier 1f — English multimodal replay (LLaVA-Instruct)
+#   Tier 2a — Aya Dataset (text-only, all 70+ languages)
+#   Tier 2b — bloom-lm (text-only, 364 languages, low-resource supplement)
+#
+# UPSAMPLING: allow_upsampling=true with max_upsample_factor=5.0
+#   Low-resource languages will be sampled with replacement up to 5× their
+#   available data. This enables near-uniform distribution.
+
+dataset_name: "multilingual_mix"
+data_dir: ""
+max_seq_len: 2048
+
+# Training hyperparameters
+num_epochs: 1
+batch_size: 64
+grad_acc_steps: 16
+warmup_ratio: 0.03
+learning_rate: 2.0e-5
+weight_decay: 0.0
+lr_scheduler_type: "cosine"
+max_grad_norm: 1.0
+num_workers: 4
+torch_dtype: "bfloat16"
+nccl_timeout_minutes: 30
+
+models_dir: "/data/model_ckpts/multilingual_ckpts"
+save_steps: 20
+logging_steps: 10
+seed: 42
+
+alignment_checkpoint: ""
+instruct_checkpoint: "/data/model_ckpts/instruct_ckpts/664e72e8-f3a0-4278-87b4-0632ed353cdf/checkpoint_9754.pt"
+
+# Multilingual mixing parameters
+total_samples: 1000000
+english_ratio: 0.4
+temperature: 5.0
+allow_upsampling: true
+max_upsample_factor: 5.0
+hf_cache_dir: "/data/v-tridas/datasets_cache"
+
+multilingual_sources:
+  # ── Tier 1a: PangeaIns (39 languages, primary multimodal) ──
+  - name: pangea_ins
+    max_samples: 500000
+    data_dir: "/data/multilingual"
+    languages:
+      - en
+      - zh
+      - hi
+      - ar
+      - es
+      - fr
+      - ru
+      - ja
+      - ko
+      - id
+      - vi
+      - tr
+      - pt
+      - sw
+      - bn
+      - de
+      - it
+      - nl
+      - pl
+      - ro
+      - uk
+      - cs
+      - el
+      - 'no'
+      - fa
+      - he
+      - gu
+      - mr
+      - ms
+      - jv
+      - ta
+      - te
+      - ur
+      - th
+      - ha
+      - ig
+      - xh
+      - yo
+      - zu
+
+  # ── Tier 1b: WIT - Wikipedia Image Text (105 languages, massive scale) ──
+  # Fills the gap for European + some Asian languages that PangeaIns lacks.
+  # ~6.5M total samples. We sample 200K focused on weak languages.
+  - name: wit
+    max_samples: 200000
+    languages:
+      # European languages weak in PangeaIns
+      - bg
+      - ca
+      - cy
+      - da
+      - et
+      - eu
+      - fi
+      - ga
+      - gl
+      - hr
+      - hu
+      - lt
+      - lv
+      - mt
+      - sk
+      - sl
+      - sr
+      - sv
+      # Asian + African with WIT presence
+      - mg
+      - my
+      - ne
+      - pa
+
+  # ── Tier 1c: ALM-Bench (100 languages, culturally diverse VQA) ──
+  - name: alm_bench
+    max_samples: 22000
+    languages:
+      - am
+      - bg
+      - ca
+      - cy
+      - da
+      - et
+      - eu
+      - fi
+      - ga
+      - gl
+      - hr
+      - hu
+      - lo
+      - lt
+      - lv
+      - mg
+      - mt
+      - my
+      - ne
+      - pa
+      - sk
+      - sl
+      - sn
+      - sr
+      - sv
+      - tl
+
+  # ── Tier 1d: MVL-SIB (197 languages, covers km + wo) ──
+  - name: mvl_sib
+    max_samples: 30000
+    languages:
+      - am
+      - bg
+      - ca
+      - cy
+      - da
+      - et
+      - eu
+      - fi
+      - ga
+      - gl
+      - hr
+      - hu
+      - km
+      - lo
+      - lt
+      - lv
+      - mg
+      - mt
+      - my
+      - ne
+      - pa
+      - sk
+      - sl
+      - sn
+      - sr
+      - sv
+      - tl
+      - wo
+
+  # ── Tier 1e: bloom-captioning (400+ langs, low-resource multimodal) ──
+  # Image captions for the hardest African + SE Asian languages.
+  # Gated dataset — requires HF token with access.
+  - name: bloom_captioning
+    max_samples: 20000
+    languages:
+      - am
+      - ha
+      - ig
+      - km
+      - lo
+      - my
+      - ne
+      - pa
+      - sn
+      - tl
+      - wo
+      - xh
+      - yo
+      - zu
+
+  # ── Tier 1f: English multimodal replay ──
+  - name: llava_instruct
+    max_samples: 50000
+    data_dir: "/data/llava-instruct"
+    languages: []
+
+  # ── Tier 2a: Text-only for ALL Tiny Aya languages ──
+  - name: aya_text
+    max_samples: 200000
+    languages: []
+
+  # ── Tier 2b: Low-resource text-only supplement ──
+  - name: bloom_lm
+    max_samples: 5000
+    languages:
+      - am
+      - km
+      - lo
+      - my
+      - ne
+      - pa
+      - tl
+
+# LoRA config
+lora:
+  rank: 256

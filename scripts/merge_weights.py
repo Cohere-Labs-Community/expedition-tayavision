@@ -26,14 +26,19 @@ text-only signal.
 α = 0.0  →  identical to the original text-only Tiny Aya Base
 α = 1.0  →  identical to the multimodal fine-tuned VLM
 Recommended sweep range: {0.3, 0.4, 0.5, 0.6, 0.7}
+
+`--alpha` accepts either one float (e.g. `0.5`) or a comma-separated sweep
+(e.g. `0.3,0.4,0.5`). For sweeps, each alpha writes to a subdirectory under
+`--output` named `alpha_<value>`.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import shutil
 import sys
-import gc
 from pathlib import Path
 from typing import Dict
 
@@ -41,7 +46,9 @@ from typing import Dict
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
-from transformers import AutoModelForCausalLM
+from huggingface_hub import snapshot_download
+from safetensors import safe_open
+from safetensors.torch import save_file
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -59,6 +66,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 LLM_PREFIX = "language_model."
 PROJECTOR_PREFIX = "multi_modal_projector."
+OUTPUT_SHARD_SIZE_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
 # Weight-tying keys: safetensors deduplication may drop one side of a tied
 # pair.  We restore it so that both the original and fine-tuned state dicts
@@ -67,6 +75,78 @@ _TIED_PAIRS = [
     # (source_key, tied_key) — source is kept by safetensors, tied is dropped
     ("language_model.model.embed_tokens.weight", "language_model.lm_head.weight"),
 ]
+
+
+class _ShardedSafetensorWriter:
+    """Write safetensors shards while keeping only one shard in memory."""
+
+    def __init__(self, output_dir: Path, shard_size_bytes: int = OUTPUT_SHARD_SIZE_BYTES):
+        self.output_dir = output_dir
+        self.shard_size_bytes = shard_size_bytes
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self._buffer: Dict[str, torch.Tensor] = {}
+        self._buffer_bytes = 0
+        self._parts: list[tuple[Path, list[str]]] = []
+
+    @staticmethod
+    def _tensor_nbytes(t: torch.Tensor) -> int:
+        return t.numel() * t.element_size()
+
+    def add(self, key: str, tensor: torch.Tensor) -> None:
+        t = tensor.detach().cpu().contiguous()
+        t_bytes = self._tensor_nbytes(t)
+
+        if self._buffer and self._buffer_bytes + t_bytes > self.shard_size_bytes:
+            self.flush()
+
+        self._buffer[key] = t
+        self._buffer_bytes += t_bytes
+
+    def flush(self) -> None:
+        if not self._buffer:
+            return
+
+        part_idx = len(self._parts) + 1
+        part_path = self.output_dir / f"model-part-{part_idx:05d}.safetensors"
+        save_file(self._buffer, str(part_path))
+        self._parts.append((part_path, list(self._buffer.keys())))
+
+        self._buffer = {}
+        self._buffer_bytes = 0
+
+    def finalize(self) -> None:
+        self.flush()
+        total = len(self._parts)
+        if total == 0:
+            raise ValueError("No tensors were written to output shards")
+
+        weight_map: Dict[str, str] = {}
+        total_size = 0
+
+        for idx, (part_path, keys) in enumerate(self._parts, start=1):
+            final_name = f"model-{idx:05d}-of-{total:05d}.safetensors"
+            final_path = self.output_dir / final_name
+            part_path.rename(final_path)
+
+            for key in keys:
+                weight_map[key] = final_name
+
+            total_size += final_path.stat().st_size
+
+        index_path = self.output_dir / "model.safetensors.index.json"
+        index_path.write_text(
+            json.dumps(
+                {
+                    "metadata": {"total_size": total_size},
+                    "weight_map": weight_map,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
 
 def _restore_tied_weights(state: Dict[str, torch.Tensor]) -> None:
@@ -220,279 +300,193 @@ def build_merged_vlm_state(
     return merged_vlm
 
 
-# ---------------------------------------------------------------------------
-# Merge summary
-# ---------------------------------------------------------------------------
-
-def _print_merge_summary(
-    original_llm: Dict[str, torch.Tensor],
-    merged_llm: Dict[str, torch.Tensor],
-    alpha: float,
-    output_path: Path,
-) -> None:
-    """Print a human-readable summary of the merge operation."""
-    total_params = sum(t.numel() for t in merged_llm.values())
-
-    # Compute overall L2 norm delta between original and merged LLM weights
-    delta_sq_sum = 0.0
-    for key in original_llm:
-        delta_sq_sum += (
-            (merged_llm[key].float() - original_llm[key].float()) ** 2
-        ).sum().item()
-    norm_delta = delta_sq_sum ** 0.5
-
-    print("\n" + "=" * 60)
-    print("  Tiny Aya Vision — Weight Merge Summary")
-    print("=" * 60)
-    print(f"  α (merge ratio)   : {alpha:.2f}  (0=text-only, 1=full VLM)")
-    print(f"  LLM param tensors : {len(original_llm):,}")
-    print(f"  Total params (LLM): {total_params:,}")
-    print(f"  ‖merged − orig‖₂  : {norm_delta:.4f}")
-    print(f"  Output path       : {output_path}")
-    print("=" * 60 + "\n")
+def _alpha_label(alpha: float) -> str:
+    return str(alpha).replace(".", "p")
 
 
-# ---------------------------------------------------------------------------
-# I/O helpers
-# ---------------------------------------------------------------------------
-
-def _load_original_llm(model_name: str, device: str, dtype: torch.dtype) -> Dict[str, torch.Tensor]:
-    """Load the original text-only LLM state dict."""
-    log.info("Loading original LLM from '%s' …", model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=dtype,
-        device_map=device,
-    )
-    state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
-    del model
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    return state
-
-
-def _load_finetuned_vlm(checkpoint_path: str, device: str, token: str = "") -> Dict[str, torch.Tensor]:
-    """Load a fine-tuned VLM state dict from a HuggingFace Hub ID, a local HF
-    model directory, or a raw ``.pt`` / ``.safetensors`` checkpoint file.
-
-    The returned state dict always contains the **full** VLM — language model
-    backbone (``language_model.*``), multi-modal projector / connector
-    (``multi_modal_projector.*``), and vision encoder (``vision_encoder.*``) —
-    because the connector is trained during IFT and must be preserved.
-
-    Loading priority
-    ----------------
-    1. If ``checkpoint_path`` looks like a HuggingFace Hub ID (no path separator
-       and not an existing directory/file), or is an existing directory that
-       contains ``config.json`` (i.e. a saved HF model dir), load via
-       ``AutoModel.from_pretrained``.
-    2. If ``checkpoint_path`` is a directory containing raw weight files
-       (``.pt`` / ``.pth`` / ``.safetensors``), load the first candidate.
-    3. If ``checkpoint_path`` points directly to a single weight file, load it.
-    """
-    from transformers import AutoModel  # local import — only needed here
-
-    p = Path(checkpoint_path)
-
-    # ------------------------------------------------------------------ #
-    # Case 1: HF Hub ID or HF-format local directory (has config.json)   #
-    # ------------------------------------------------------------------ #
-    is_hf_dir = p.is_dir() and (p / "config.json").exists()
-    is_hub_id = not p.exists()  # doesn't exist locally → must be a Hub ID
-
-    if is_hf_dir or is_hub_id:
-        log.info(
-            "Loading fine-tuned VLM via AutoModel.from_pretrained('%s') …",
-            checkpoint_path,
-        )
-        try:
-            kwargs = {"torch_dtype": torch.float32, "trust_remote_code": True}
-            if token:
-                kwargs["token"] = token
-            if device != "cpu":
-                kwargs["device_map"] = device
-                kwargs["low_cpu_mem_usage"] = True
-
-            model = AutoModel.from_pretrained(checkpoint_path, **kwargs)
-            state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
-            del model
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            _restore_tied_weights(state)
-            return state
-
-        except (ValueError, OSError) as exc:
-            # Custom architecture not registered in transformers -- download raw
-            # weight files and load them directly (bypasses model class lookup).
-            if (
-                "model_type" not in str(exc)
-                and "Unrecognized" not in str(exc)
-                and "does not recognize this architecture" not in str(exc)
-            ):
-                raise
-            log.warning(
-                "AutoModel could not instantiate '%s' (%s). "
-                "Falling back to raw weight download via snapshot_download ...",
-                checkpoint_path, exc,
-            )
-
-        from huggingface_hub import snapshot_download  # lazy import
-        snap_kwargs = {}
-        if token:
-            snap_kwargs["token"] = token
-        local_dir = Path(snapshot_download(checkpoint_path, **snap_kwargs))
-        log.info("Snapshot downloaded to '%s'", local_dir)
-
-        # Prefer safetensors shards, then .bin/.pt files
-        safetensor_shards = sorted(local_dir.glob("*.safetensors"))
-        if safetensor_shards:
-            from safetensors.torch import load_file
-            state: Dict[str, torch.Tensor] = {}
-            for shard in safetensor_shards:
-                log.info("  Loading shard: %s", shard.name)
-                state.update(load_file(str(shard), device=device))
-        else:
-            bin_files = sorted(local_dir.glob("*.bin")) + sorted(local_dir.glob("*.pt"))
-            if not bin_files:
-                raise FileNotFoundError(
-                    f"No .safetensors / .bin / .pt weight files found in '{local_dir}'."
-                )
-            state = {}
-            for bf in bin_files:
-                log.info("  Loading: %s", bf.name)
-                chunk = torch.load(str(bf), map_location=device, weights_only=True)
-                if isinstance(chunk, dict) and "state_dict" in chunk:
-                    chunk = chunk["state_dict"]
-                if isinstance(chunk, dict) and "model" in chunk:
-                    chunk = chunk["model"]
-                state.update(chunk)
-
-        state = {k: v.detach().cpu() for k, v in state.items()}
-        _restore_tied_weights(state)
-        return state
-
-    # ------------------------------------------------------------------ #
-    # Case 2: directory with raw weight files                             #
-    # ------------------------------------------------------------------ #
+def _resolve_model_dir(model_ref: str) -> Path:
+    p = Path(model_ref)
     if p.is_dir():
-        candidates = (
-            list(p.glob("*.pt"))
-            + list(p.glob("*.pth"))
-            + list(p.glob("*.safetensors"))
-        )
-        if not candidates:
-            raise FileNotFoundError(
-                f"No .pt / .pth / .safetensors checkpoint file found in "
-                f"'{checkpoint_path}'. Pass the path to a checkpoint file "
-                "directly, ensure the directory contains one, or use a "
-                "HuggingFace Hub ID."
-            )
-        checkpoint_path = str(candidates[0])
-        log.info("Found checkpoint file: %s", checkpoint_path)
+        return p
+    return Path(snapshot_download(repo_id=model_ref))
 
-    # ------------------------------------------------------------------ #
-    # Case 3: single weight file                                          #
-    # ------------------------------------------------------------------ #
-    log.info("Loading fine-tuned VLM state dict from '%s' …", checkpoint_path)
 
-    if checkpoint_path.endswith(".safetensors"):
-        from safetensors.torch import load_file
-        state = load_file(checkpoint_path, device=device)
-    else:
-        state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+def _get_weight_map(model_dir: Path) -> Dict[str, str]:
+    index_path = model_dir / "model.safetensors.index.json"
+    if index_path.exists():
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        return {k: v for k, v in payload.get("weight_map", {}).items()}
 
-    # Unwrap common training-framework wrappers
-    if isinstance(state, dict) and "state_dict" in state:
-        state = state["state_dict"]
-    if isinstance(state, dict) and "model" in state:
-        state = state["model"]
+    single = model_dir / "model.safetensors"
+    if single.exists():
+        with safe_open(str(single), framework="pt", device="cpu") as f:
+            return {k: single.name for k in f.keys()}
 
-    state = {k: v.detach().cpu() for k, v in state.items()}
-    _restore_tied_weights(state)
-    return state
+    shard_files = sorted(model_dir.glob("*.safetensors"))
+    if shard_files:
+        out: Dict[str, str] = {}
+        for shard in shard_files:
+            with safe_open(str(shard), framework="pt", device="cpu") as f:
+                for k in f.keys():
+                    out[k] = shard.name
+        return out
+
+    raise FileNotFoundError(f"No safetensors weights found under {model_dir}")
+
+
+def _copy_hf_metadata_files(src_dir: Path, dst_dir: Path) -> None:
+    keep_exts = {".json", ".txt", ".model", ".py", ".md"}
+    skip_names = {"model.safetensors.index.json"}
+
+    for item in src_dir.iterdir():
+        if item.is_dir():
+            continue
+        if item.name.endswith((".safetensors", ".bin", ".pt", ".pth")):
+            continue
+        if item.name in skip_names:
+            continue
+        if item.suffix.lower() in keep_exts or item.name in {"README", "LICENSE"}:
+            shutil.copy2(item, dst_dir / item.name)
 
 
 def _save_outputs(
     merged_state: Dict[str, torch.Tensor],
     output_dir: Path,
     dtype: torch.dtype,
-    save_hf: bool,
-    original_llm_name: str,
+    finetuned_vlm_name: str | None,
+    device: str = "cpu",
+    save_model: bool = True,
 ) -> None:
-    """Save merged state dict (and optionally a HuggingFace model dir).
+    """Compatibility helper retained for unit tests.
 
-    The raw ``merged_state.pt`` always contains the **full** VLM state dict
-    (LLM backbone + connector + vision encoder) so nothing trained during IFT
-    is discarded.
-
-    When ``save_hf=True`` two artefacts are written inside ``hf_model/``:
-    * The merged LLM backbone saved via ``AutoModelForCausalLM.save_pretrained``.
-    * ``connector_state.pt`` — the multi-modal projector weights (with the
-      ``multi_modal_projector.`` prefix intact) so they can be reloaded
-      directly into a ``TinyAyaVisionForConditionalGeneration`` instance.
+    The streaming merge path does not use this function.
     """
+    del finetuned_vlm_name, device, save_model
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Cast to target dtype before saving
     cast_state = {k: v.to(dtype) for k, v in merged_state.items()}
+    torch.save(cast_state, output_dir / "merged_state.pt")
 
-    # Always save the full VLM state dict (LLM + connector + vision encoder)
-    pt_path = output_dir / "merged_state.pt"
-    torch.save(cast_state, pt_path)
-    log.info("Saved full merged VLM state dict → %s", pt_path)
 
-    if save_hf:
-        hf_dir = output_dir / "hf_model"
-        hf_dir.mkdir(parents=True, exist_ok=True)
+def _stream_merge_one_alpha(
+    *,
+    original_dir: Path,
+    finetuned_dir: Path,
+    original_map: Dict[str, str],
+    finetuned_map: Dict[str, str],
+    alpha: float,
+    output_dir: Path,
+    dtype: torch.dtype,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _copy_hf_metadata_files(finetuned_dir, output_dir)
 
-        # ---- 1. LLM backbone ------------------------------------------------
-        llm_state = {
-            key[len(LLM_PREFIX):]: val
-            for key, val in cast_state.items()
-            if key.startswith(LLM_PREFIX)
-        }
+    orig_embed = "model.embed_tokens.weight"
+    ft_embed = f"{LLM_PREFIX}model.embed_tokens.weight"
+    ft_lm_head = f"{LLM_PREFIX}lm_head.weight"
+    has_ft_embed = ft_embed in finetuned_map
+    has_ft_lm_head = ft_lm_head in finetuned_map
 
-        log.info("Building HF LLM model at '%s' …", hf_dir)
-        model = AutoModelForCausalLM.from_pretrained(
-            original_llm_name,
-            torch_dtype=dtype,
-        )
-        missing, unexpected = model.load_state_dict(llm_state, strict=False)
-        if missing:
-            log.warning(
-                "HF save: %d missing LLM keys (expected if vocab was resized): %s …",
-                len(missing), missing[:3],
+    llm_keys: list[str] = []
+    for k in sorted(original_map):
+        if k == "lm_head.weight" and has_ft_embed and not has_ft_lm_head:
+            continue
+        ft_key = f"{LLM_PREFIX}{k}"
+        if ft_key not in finetuned_map:
+            raise KeyError(f"Missing fine-tuned key for original key '{k}'")
+        llm_keys.append(k)
+
+    log.info("Merging %d LLM parameter tensors with α=%.2f …", len(llm_keys), alpha)
+
+    writer = _ShardedSafetensorWriter(output_dir)
+    delta_sq_sum = 0.0
+    total_params = 0
+    out_weight_map: Dict[str, str] = {}
+
+    # Merge LLM tensors
+    for key in llm_keys:
+        orig_file = original_dir / original_map[key]
+        ft_key = f"{LLM_PREFIX}{key}"
+        ft_file = finetuned_dir / finetuned_map[ft_key]
+
+        with safe_open(str(orig_file), framework="pt", device="cpu") as f_orig:
+            orig_t = f_orig.get_tensor(key)
+        with safe_open(str(ft_file), framework="pt", device="cpu") as f_ft:
+            ft_t = f_ft.get_tensor(ft_key)
+
+        if orig_t.shape != ft_t.shape:
+            raise ValueError(
+                f"Shape mismatch for key '{key}': "
+                f"original={tuple(orig_t.shape)}, finetuned={tuple(ft_t.shape)}"
             )
-        if unexpected:
-            log.warning(
-                "HF save: %d unexpected LLM keys: %s …", len(unexpected), unexpected[:3]
-            )
-        model.save_pretrained(str(hf_dir))
-        log.info("Saved HF LLM backbone → %s", hf_dir)
-        del model
 
-        # ---- 2. Connector (multi-modal projector) ----------------------------
-        # The connector is trained during IFT so we must persist it alongside
-        # the LLM backbone.  Keys keep their original ``multi_modal_projector.*``
-        # prefix so they can be loaded with a simple load_state_dict call.
-        connector_state = {
-            key: val
-            for key, val in cast_state.items()
-            if key.startswith(PROJECTOR_PREFIX)
-        }
-        if connector_state:
-            connector_path = hf_dir / "connector_state.pt"
-            torch.save(connector_state, connector_path)
-            log.info(
-                "Saved connector weights (%d tensors) → %s",
-                len(connector_state), connector_path,
-            )
-        else:
-            log.warning(
-                "No '%s*' keys found in merged state — connector not saved.",
-                PROJECTOR_PREFIX,
-            )
+        orig_f = orig_t.float()
+        ft_f = ft_t.float()
+        merged_f = (1.0 - alpha) * orig_f + alpha * ft_f
+        merged_out = merged_f.to(orig_t.dtype).to(dtype).detach().cpu().contiguous()
+
+        delta_sq_sum += ((merged_out.float() - orig_t.float()) ** 2).sum().item()
+        total_params += merged_out.numel()
+
+        out_key = f"{LLM_PREFIX}{key}"
+        writer.add(out_key, merged_out)
+        del orig_t, ft_t, orig_f, ft_f, merged_f, merged_out
+
+    # Copy non-LLM tensors from finetuned untouched (except output dtype cast)
+    for ft_key, rel_file in sorted(finetuned_map.items()):
+        if ft_key.startswith(LLM_PREFIX):
+            continue
+        with safe_open(str(finetuned_dir / rel_file), framework="pt", device="cpu") as f_ft:
+            t = f_ft.get_tensor(ft_key)
+        writer.add(ft_key, t.to(dtype).detach().cpu().contiguous())
+        del t
+
+    writer.finalize()
+
+    # Also export a compatibility pt file; load shard-by-shard to avoid full spikes.
+    index_payload = json.loads((output_dir / "model.safetensors.index.json").read_text(encoding="utf-8"))
+    for k, shard in index_payload["weight_map"].items():
+        out_weight_map.setdefault(shard, []).append(k)
+    merged_state: Dict[str, torch.Tensor] = {}
+    for shard, keys in sorted(out_weight_map.items()):
+        with safe_open(str(output_dir / shard), framework="pt", device="cpu") as f:
+            for k in keys:
+                merged_state[k] = f.get_tensor(k)
+    torch.save(merged_state, output_dir / "merged_state.pt")
+
+    norm_delta = delta_sq_sum ** 0.5
+    print("\n" + "=" * 60)
+    print("  Tiny Aya Vision — Weight Merge Summary")
+    print("=" * 60)
+    print(f"  α (merge ratio)   : {alpha:.2f}  (0=text-only, 1=full VLM)")
+    print(f"  LLM param tensors : {len(llm_keys):,}")
+    print(f"  Total params (LLM): {total_params:,}")
+    print(f"  ‖merged − orig‖₂  : {norm_delta:.4f}")
+    print(f"  Output path       : {output_dir}")
+    print("=" * 60 + "\n")
+
+
+def _push_to_hub(
+    folder_path: Path,
+    repo_id: str,
+    path_in_repo: str | None,
+    alpha: float,
+    private: bool,
+) -> None:
+    """Upload an output folder to Hugging Face Hub."""
+    from huggingface_hub import HfApi
+
+    api = HfApi()
+    repo_url = api.create_repo(repo_id=repo_id, exist_ok=True, private=private)
+    upload_kwargs = {
+        "folder_path": str(folder_path),
+        "repo_id": repo_url.repo_id,
+        "commit_message": f"Upload merged weights (alpha={alpha})",
+    }
+    if path_in_repo:
+        upload_kwargs["path_in_repo"] = path_in_repo
+    api.upload_folder(**upload_kwargs)
+    suffix = f"/tree/main/{path_in_repo}" if path_in_repo else ""
+    log.info("Pushed merged model to %s%s", repo_url, suffix)
 
 
 # ---------------------------------------------------------------------------
@@ -516,20 +510,35 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--alpha",
-        type=float,
         required=True,
-        help="Merge ratio α ∈ [0, 1]. 0 = pure original text model; 1 = pure fine-tuned VLM.",
+        help=(
+            "Merge ratio(s) α ∈ [0, 1]. Accepts a single float (e.g. 0.5) "
+            "or comma-separated list (e.g. 0.3,0.4,0.5)."
+        ),
     )
     parser.add_argument(
         "--output",
         required=True,
-        help="Output directory. merged_state.pt will be written here.",
+        help=(
+            "Output directory. This becomes a complete save_pretrained model "
+            "directory and also includes merged_state.pt."
+        ),
     )
     parser.add_argument(
-        "--save-hf",
+        "--hub-repo-id",
+        default=None,
+        help="Optional destination Hugging Face repo ID. If set, upload output there.",
+    )
+    parser.add_argument(
+        "--hub-path-in-repo",
+        default=None,
+        help="Optional subdirectory inside the destination Hub repo, useful for alpha sweeps.",
+    )
+    parser.add_argument(
+        "--hub-private",
         action="store_true",
         default=False,
-        help="Also save the merged LLM backbone as a HuggingFace model directory.",
+        help="Create the destination Hub repo as private if it does not exist.",
     )
     parser.add_argument(
         "--dtype",
@@ -540,45 +549,60 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--device",
         default="cpu",
-        help="Device to load model weights onto (e.g. 'cpu', 'cuda:0').",
+        help="Unused now; retained for CLI compatibility.",
     )
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> None:
     args = parse_args(argv)
-
-    alpha = args.alpha
-    if not 0.0 <= alpha <= 1.0:
-        log.error("--alpha must be in [0, 1], got %.3f", alpha)
+    try:
+        alphas = [float(v.strip()) for v in str(args.alpha).split(",") if v.strip()]
+    except ValueError:
+        log.error("--alpha must be a float or comma-separated floats, got %r", args.alpha)
         sys.exit(1)
+    if not alphas:
+        log.error("--alpha cannot be empty")
+        sys.exit(1)
+    for alpha in alphas:
+        if not 0.0 <= alpha <= 1.0:
+            log.error("--alpha must be in [0, 1], got %.3f", alpha)
+            sys.exit(1)
 
     dtype = getattr(torch, args.dtype)
-    output_dir = Path(args.output)
+    output_root = Path(args.output)
+    is_sweep = len(alphas) > 1
 
-    # ---- Load weights ----
-    original_llm_state = _load_original_llm(args.original, args.device, dtype)
-    finetuned_vlm_state = _load_finetuned_vlm(args.finetuned, args.device)
+    original_dir = _resolve_model_dir(args.original)
+    finetuned_dir = _resolve_model_dir(args.finetuned)
+    original_map = _get_weight_map(original_dir)
+    finetuned_map = _get_weight_map(finetuned_dir)
 
-    # ---- Merge ----
-    merged_vlm_state = build_merged_vlm_state(original_llm_state, finetuned_vlm_state, alpha)
+    for alpha in alphas:
+        label = _alpha_label(alpha)
+        output_dir = output_root / f"alpha_{label}" if is_sweep else output_root
 
-    # ---- Summary ----
-    merged_llm_state = {
-        key[len(LLM_PREFIX):]: val
-        for key, val in merged_vlm_state.items()
-        if key.startswith(LLM_PREFIX)
-    }
-    _print_merge_summary(original_llm_state, merged_llm_state, alpha, output_dir)
+        _stream_merge_one_alpha(
+            original_dir=original_dir,
+            finetuned_dir=finetuned_dir,
+            original_map=original_map,
+            finetuned_map=finetuned_map,
+            alpha=alpha,
+            output_dir=output_dir,
+            dtype=dtype,
+        )
 
-    # ---- Save ----
-    _save_outputs(
-        merged_vlm_state,
-        output_dir,
-        dtype=dtype,
-        save_hf=args.save_hf,
-        original_llm_name=args.original,
-    )
+        if args.hub_repo_id:
+            path_in_repo = args.hub_path_in_repo
+            if is_sweep:
+                path_in_repo = f"{path_in_repo.rstrip('/')}/alpha_{label}" if path_in_repo else f"alpha_{label}"
+            _push_to_hub(
+                folder_path=output_dir,
+                repo_id=args.hub_repo_id,
+                path_in_repo=path_in_repo,
+                alpha=alpha,
+                private=args.hub_private,
+            )
 
     log.info("Done. ✓")
 
