@@ -10,6 +10,8 @@ Fields:
     Label: int (0-3, index of correct option)
 """
 
+import re
+
 from datasets import DatasetDict, load_dataset
 
 OPTION_LETTERS = ["A", "B", "C", "D"]
@@ -42,7 +44,7 @@ def cvqa_doc_to_text(doc):
 
     return (
         f"<image>\n{question}\n{options_str}\n"
-        "Answer with the option letter (A, B, C, or D)."
+        "Respond with exactly one letter: A, B, C, or D."
     )
 
 
@@ -53,14 +55,25 @@ def cvqa_doc_to_target(doc):
 
 def cvqa_process_results(doc, results):
     """Check if the model's answer matches the correct option letter."""
-    pred = results[0].strip().upper()
+    pred = _extract_option_letter(results[0])
     gold = OPTION_LETTERS[doc["Label"]]
 
-    # Extract just the first letter if the model outputs more
-    if pred and pred[0] in OPTION_LETTERS:
-        pred = pred[0]
-
     return {"exact_match": float(pred == gold)}
+
+
+def _extract_option_letter(response):
+    """Extract explicit A/B/C/D answers without using arbitrary first letters."""
+    text = str(response).strip()
+    patterns = [
+        r"^[\s*_`]*\(?([ABCD])\)?[\s*_`]*[\.:,-]?\s*$",
+        r"\b(?:answer|option|choice)\s*(?:is|:)?\s*\(?([ABCD])\)?\b",
+        r"\bthe\s+answer\s+is\s*\(?([ABCD])\)?\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+    return None
 
 
 # CVQA English translated task — uses English-translated questions and options for all samples
@@ -70,7 +83,7 @@ def cvqa_en_doc_to_text(doc):
     options_str = "\n".join(f"{OPTION_LETTERS[i]}. {opt}" for i, opt in enumerate(options))
     return (
         f"<image>\n{question}\n{options_str}\n"
-        "Answer with the option letter (A, B, C, or D)."
+        "Respond with exactly one letter: A, B, C, or D."
     )
 
 
