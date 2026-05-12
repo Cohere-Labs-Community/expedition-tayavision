@@ -165,14 +165,28 @@ def main():
         chunk_output_dir.mkdir(parents=True, exist_ok=True)
         samples_jsonl = chunk_output_dir / "samples.jsonl"
 
-        # Resume from a previous partial run: count already-written samples.
+        # Resume from a previous partial run: count already-written samples and
+        # seed the running aggregate with their per-sample metrics.
         n_done = 0
+        sample_metrics: dict[str, list] = {}
         if samples_jsonl.exists():
             with open(samples_jsonl) as _f:
-                n_done = sum(1 for line in _f if line.strip())
+                for line in _f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    n_done += 1
+                    s = _json2.loads(line)
+                    if args.task == "cvqa" and "doc" in s and "filtered_resps" in s:
+                        from evaluation.tasks.cvqa.utils import cvqa_process_results
+
+                        resp = (s.get("filtered_resps") or [""])[0]
+                        s.update(cvqa_process_results(s["doc"], [resp]))
+                    for k, v in s.items():
+                        if isinstance(v, (int, float)) and k != "doc_id":
+                            sample_metrics.setdefault(k, []).append(v)
             logger.info(f"Resuming: {n_done} samples already written, skipping to chunk {n_done // args.chunk_size + 1}")
 
-        sample_metrics: dict[str, list] = {}
         n_chunks = (total_samples + args.chunk_size - 1) // args.chunk_size
         eval_start_time = time.monotonic()
 

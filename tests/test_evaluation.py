@@ -79,6 +79,24 @@ class TestCVQATask:
         score = cvqa_process_results(doc, results)
         assert score["exact_match"] == 1.0
 
+    def test_process_results_accepts_explicit_answer_letter(self):
+        """Explicit answer-letter phrasing scores correctly."""
+        from evaluation.tasks.cvqa.utils import cvqa_process_results
+
+        doc = {"Label": 1}  # B
+        results = ["The answer is B."]
+        score = cvqa_process_results(doc, results)
+        assert score["exact_match"] == 1.0
+
+    def test_process_results_rejects_arbitrary_first_letter(self):
+        """Verbose prose should not be parsed by its first character."""
+        from evaluation.tasks.cvqa.utils import cvqa_process_results
+
+        doc = {"Label": 1}  # B
+        results = ["Based on the image, it looks like a temple."]
+        score = cvqa_process_results(doc, results)
+        assert score["exact_match"] == 0.0
+
     def test_process_results_incorrect(self):
         """Incorrect answer scores 0.0."""
         from evaluation.tasks.cvqa.utils import cvqa_process_results
