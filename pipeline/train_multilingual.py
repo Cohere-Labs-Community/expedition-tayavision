@@ -317,13 +317,32 @@ def run(cfg: DictConfig):
         multilingual_sources=multilingual_sources,
     )
 
-    model_config = TinyAyaVisionConfig.for_encoder(
-        cfg.vision.vision_encoder_type, llm=cfg.llm,
+    backbone_name = cfg.get("backbone", {}).get("backbone_type", "tiny_aya") \
+        if "backbone" in cfg else "tiny_aya"
+    model_config = TinyAyaVisionConfig.for_backbone(
+        backbone=backbone_name,
+        encoder=cfg.vision.vision_encoder_type,
     )
+    for group_name in ("vision", "backbone"):
+        if group_name in cfg:
+            for k, v in OmegaConf.to_container(cfg[group_name], resolve=True).items():
+                if hasattr(model_config, k):
+                    setattr(model_config, k, v)
+    if model_config.backbone_type == "tiny_aya":
+        model_config.llm_model_name = {
+            "base": "CohereLabs/tiny-aya-base",
+            "global": "CohereLabs/tiny-aya-global",
+        }[cfg.llm]
+    if "controller" in cfg:
+        model_config.controller_config = OmegaConf.to_container(
+            cfg.controller, resolve=True
+        )
 
     if "layers_to_transform" not in lora_dict:
         n = model_config.num_llm_layers
         lora_dict["layers_to_transform"] = list(range(n // 2, n))
+    if "target_modules" not in lora_dict and model_config.lora_target_modules:
+        lora_dict["target_modules"] = list(model_config.lora_target_modules)
     lora_config = LoraAdapterConfig(**lora_dict)
 
     main(

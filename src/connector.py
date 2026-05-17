@@ -115,16 +115,23 @@ class MultiModalProjector(nn.Module):
 
         return image_features
 
-    def forward(self, image_features: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, image_features: torch.Tensor, pre_shuffled: bool = False
+    ) -> torch.Tensor:
         """Project vision features into the LLM embedding space.
 
         Args:
-            image_features: (B, num_patches, vision_hidden_size).
+            image_features: ``(B, num_patches, vision_hidden_size)`` when
+                ``pre_shuffled`` is False, else ``(B, num_tokens_after_shuffle,
+                ps_dim)``. ``pre_shuffled=True`` is used when the caller
+                (e.g. the script-conditioned controller) needs to operate
+                on the post-pixel-shuffle features before projection.
 
         Returns:
             (B, num_tokens_after_shuffle, llm_hidden_size).
         """
-        image_features = self.pixel_shuffle(image_features)
+        if not pre_shuffled:
+            image_features = self.pixel_shuffle(image_features)
         image_features = self.layernorm(image_features)
         hidden_states = self.linear_1(image_features)
 

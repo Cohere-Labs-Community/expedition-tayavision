@@ -197,15 +197,24 @@ def main() -> None:
         type=str,
         default="base",
         choices=["base", "global"],
-        help="Which Tiny Aya LLM backbone to use (default: base).",
+        help="Which Tiny Aya LLM backbone to use (default: base). Ignored when --backbone is non-tiny_aya.",
+    )
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        default="tiny_aya",
+        help="Backbone name resolved against config/backbone/<name>.yaml (default: tiny_aya).",
     )
     args = parser.parse_args()
 
-    vlm_config = (
-        TinyAyaVisionConfig.for_global()
-        if args.model == "global"
-        else TinyAyaVisionConfig.for_base()
-    )
+    if args.backbone == "tiny_aya":
+        vlm_config = (
+            TinyAyaVisionConfig.for_global()
+            if args.model == "global"
+            else TinyAyaVisionConfig.for_base()
+        )
+    else:
+        vlm_config = TinyAyaVisionConfig.for_backbone(args.backbone)
 
     alpha = args.alpha if args.alpha is not None else args.rank * 2
     layers_start = (
@@ -214,10 +223,13 @@ def main() -> None:
         else vlm_config.num_llm_layers // 2
     )
 
-    lora_config = LoraAdapterConfig(
+    lora_config = LoraAdapterConfig.from_vlm_config(
+        vlm_config,
         rank=args.rank,
         lora_alpha=alpha,
-        layers_to_transform=list(range(layers_start, vlm_config.num_llm_layers)),
+    )
+    lora_config.layers_to_transform = list(
+        range(layers_start, vlm_config.num_llm_layers)
     )
 
     print(f"Model: {vlm_config.llm_model_name}")

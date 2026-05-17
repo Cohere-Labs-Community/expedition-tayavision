@@ -67,12 +67,16 @@ class LoraAdapterConfig:
     ) -> LoraAdapterConfig:
         """Build a LoraAdapterConfig targeting the upper half of the LLM's layers.
 
-        Derives layer indices from vlm_config.num_llm_layers so the config
-        stays correct regardless of which Tiny Aya variant is used.
+        Derives layer indices from ``vlm_config.num_llm_layers`` and module
+        names from ``vlm_config.lora_target_modules`` so the config stays
+        correct across backbones.
         """
         num_layers = vlm_config.num_llm_layers
         first_mid = num_layers // 2
         layers = list(range(first_mid, num_layers))
+        target_modules = getattr(vlm_config, "lora_target_modules", None)
+        if target_modules:
+            kwargs.setdefault("target_modules", list(target_modules))
         return cls(layers_to_transform=layers, **kwargs)
 
     def to_peft_config(self) -> LoraConfig:

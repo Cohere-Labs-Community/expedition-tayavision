@@ -140,9 +140,17 @@ def train(
     accumulated_loss = 0.0
     accumulated_ce_loss = 0.0
     accumulated_align_reg_loss = 0.0
+    accumulated_rate_loss = 0.0
+    accumulated_expected_tokens = 0.0
     max_image_tokens_in_window = 0
     use_ddp = dist.is_initialized()
     is_main = (not use_ddp) or dist.get_rank() == 0
+
+    # Script-controller knobs (rate-loss is only added when the controller is built).
+    _raw_model = model.module if hasattr(model, "module") else model
+    _ctrl_cfg = getattr(_raw_model.config, "controller_config", None) or {}
+    controller_enabled = bool(_ctrl_cfg.get("enabled", False))
+    controller_rate_lambda = float(_ctrl_cfg.get("rate_lambda", 0.0))
 
     # Accumulate generation samples across save steps
     generation_rows = []
@@ -202,11 +210,25 @@ def train(
                 align_reg_loss /= training_config.grad_acc_steps
 
             loss = ce_loss + training_config.embed_align_reg * align_reg_loss
+
+            rate_loss_val = 0.0
+            expected_tokens_val = 0.0
+            if controller_enabled and outputs.controller_aux is not None:
+                aux = outputs.controller_aux
+                if "rate_loss" in aux:
+                    rate_term = aux["rate_loss"] / training_config.grad_acc_steps
+                    loss = loss + controller_rate_lambda * rate_term
+                    rate_loss_val = float(rate_term.detach().item())
+                if "expected_tokens" in aux:
+                    expected_tokens_val = float(aux["expected_tokens"].mean().item())
+
             loss.backward()
 
             accumulated_loss += loss.item()
             accumulated_ce_loss += ce_loss.item()
             accumulated_align_reg_loss += align_reg_loss.item()
+            accumulated_rate_loss += rate_loss_val
+            accumulated_expected_tokens += expected_tokens_val
 
             if (step + 1) % training_config.grad_acc_steps == 0:
                 grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -227,6 +249,11 @@ def train(
                         "train/lr": lr_scheduler.get_last_lr()[0],
                         "train/max_image_tokens": max_image_tokens_in_window,
                     }
+                    if controller_enabled:
+                        log_dict["train/rate_loss"] = accumulated_rate_loss
+                        log_dict["train/expected_tokens"] = (
+                            accumulated_expected_tokens / training_config.grad_acc_steps
+                        )
 
                     if "projector_token" in norm_cache:
                         pn = norm_cache["projector_token"]
@@ -279,6 +306,8 @@ def train(
                 accumulated_loss = 0.0
                 accumulated_ce_loss = 0.0
                 accumulated_align_reg_loss = 0.0
+                accumulated_rate_loss = 0.0
+                accumulated_expected_tokens = 0.0
                 max_image_tokens_in_window = 0
 
     hook_handle.remove()
@@ -314,11 +343,32 @@ def run(cfg: DictConfig):
     torch.manual_seed(training_config.seed)
     torch.cuda.manual_seed_all(training_config.seed)
     
-    # Instantiate Model Config 
-    model_config = TinyAyaVisionConfig.for_encoder(
-        cfg.vision.vision_encoder_type, 
-        llm=cfg.llm
+    # Instantiate Model Config
+    backbone_name = cfg.get("backbone", {}).get("backbone_type", "tiny_aya") \
+        if "backbone" in cfg else "tiny_aya"
+    model_config = TinyAyaVisionConfig.for_backbone(
+        backbone=backbone_name,
+        encoder=cfg.vision.vision_encoder_type,
     )
+    # Apply Hydra group overrides (vision + backbone YAMLs already merged by for_backbone;
+    # this catches CLI-level overrides on those groups).
+    for group_name in ("vision", "backbone"):
+        if group_name in cfg:
+            for k, v in OmegaConf.to_container(cfg[group_name], resolve=True).items():
+                if hasattr(model_config, k):
+                    setattr(model_config, k, v)
+    # Backwards compat: cfg.llm still picks Tiny Aya base/global variant.
+    if model_config.backbone_type == "tiny_aya":
+        model_config.llm_model_name = {
+            "base": "CohereLabs/tiny-aya-base",
+            "global": "CohereLabs/tiny-aya-global",
+        }[cfg.llm]
+    # Carry the script-controller config (if any) onto the model config so
+    # the VLM builds the controller at init time.
+    if "controller" in cfg:
+        model_config.controller_config = OmegaConf.to_container(
+            cfg.controller, resolve=True
+        )
 
     # Compute per-GPU batch size from global batch size
     assert training_config.batch_size % world_size == 0, (

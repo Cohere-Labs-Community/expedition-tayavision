@@ -32,8 +32,11 @@ def request_key(request) -> str:
     return hashlib.md5((context + gen_kwargs).encode()).hexdigest()
 
 
-# Subclasses HFMultimodalLM (lm-eval's multimodal backend) to override
+# Subclasses HFMultimodalLM (lm-eval's multimodal backend) to override.
+# Registered under two names: the original ``tiny-aya-vision`` for backward
+# compatibility, and a backbone-agnostic ``taya-vision`` for new pipelines.
 @register_model("tiny-aya-vision")
+@register_model("taya-vision")
 class TinyAyaVisionLM(HFMultimodalLM):
     AUTO_MODEL_CLASS = transformers.AutoModelForCausalLM
 

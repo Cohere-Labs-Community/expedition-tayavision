@@ -6,6 +6,11 @@ from transformers.modeling_outputs import ModelOutput
 
 from config.model_config import TinyAyaVisionConfig
 from src.connector import create_projector
+from src.script_controller import (
+    FertilityTable,
+    ScriptController,
+    ScriptControllerConfig,
+)
 from src.vision_encoders import create_vision_encoder
 
 
@@ -19,6 +24,7 @@ class TinyAyaVisionOutput(ModelOutput):
     hidden_states: tuple[torch.FloatTensor, ...] | None = None
     attentions: tuple[torch.FloatTensor, ...] | None = None
     image_hidden_states: torch.FloatTensor | None = None
+    controller_aux: dict | None = None
 
 
 class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
@@ -36,7 +42,6 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
     main_input_name = "input_ids"
     _supports_flash_attn_2 = False
     _no_split_modules = ["SigLIPVisionEncoder", "MoonViTVisionEncoder"]
-    _tied_weights_keys = {"language_model.lm_head.weight": "language_model.model.embed_tokens.weight"}
 
     def __init__(self, config: TinyAyaVisionConfig, **kwargs):
         super().__init__(config, **kwargs)
@@ -63,6 +68,27 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
 
         self.generation_config = self.language_model.generation_config
         self._image_token_id: int | None = config.image_token_id
+
+        # Compute weight-tying keys at runtime from the loaded LLM, so backbones
+        # that don't tie embeddings (e.g. Qwen3-4B-Instruct) are handled correctly.
+        if getattr(self.language_model.config, "tie_word_embeddings", False):
+            self._tied_weights_keys = {
+                "language_model.lm_head.weight":
+                    "language_model.model.embed_tokens.weight"
+            }
+        else:
+            self._tied_weights_keys = {}
+
+        # Optional Script-Conditioned Token Allocation Controller.
+        self.script_controller: ScriptController | None = None
+        ctrl_cfg = ScriptControllerConfig.from_dict(getattr(config, "controller_config", None))
+        if ctrl_cfg.enabled:
+            fertility = FertilityTable.load(ctrl_cfg.fertility_table_path)
+            self.script_controller = ScriptController(
+                vision_hidden_size=config.vision_hidden_size,
+                cfg=ctrl_cfg,
+                fertility_table=fertility,
+            ).to(config.torch_dtype)
 
         self.post_init()
 
@@ -109,17 +135,22 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         self,
         pixel_values: torch.Tensor,
         image_grid_hws: torch.Tensor | None = None,
-    ) -> torch.Tensor | list[torch.Tensor]:
+        lang_codes: list[str] | None = None,
+    ) -> tuple[torch.Tensor | list[torch.Tensor], dict | None]:
         """Extract and project image features.
 
         Args:
             pixel_values: Preprocessed image tensor(s).
             image_grid_hws: (B, 2) tile-grid dimensions, required for MoonViT.
+            lang_codes: Optional per-sample language codes (FLORES-200 style)
+                used by the script-conditioned controller.
 
         Returns:
-            SigLIP: (B, num_tokens_after_shuffle, llm_hidden_size) tensor.
-            MoonViT: list of (N_tiles_i * tokens_per_tile, llm_hidden_size) tensors,
-                     one per image.
+            ``(image_features, controller_aux)``. ``image_features`` is
+            ``(B, num_tokens_after_shuffle, llm_hidden_size)`` for SigLIP or a
+            list of ``(T_i, llm_hidden_size)`` tensors for MoonViT.
+            ``controller_aux`` is ``None`` when the script controller is
+            disabled; otherwise the aux dict from :class:`ScriptController`.
         """
         if self.config.vision_encoder_type == "moonvit":
             raw_features = self.vision_encoder(pixel_values, image_grid_hws=image_grid_hws)
@@ -128,10 +159,22 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
                 feat = feat.view(-1, feat.shape[-1])
                 proj = self.multi_modal_projector(feat)
                 projected.append(proj)
-            return projected
-        else:
-            vision_features = self.vision_encoder(pixel_values)
-            return self.multi_modal_projector(vision_features)
+            return projected, None
+
+        vision_features = self.vision_encoder(pixel_values)
+
+        # Script-controller off → preserve the exact existing path.
+        if self.script_controller is None:
+            return self.multi_modal_projector(vision_features), None
+
+        # Controller on → run pixel-shuffle here, route through SCTAC, then
+        # finish projection on the (possibly compressed + zero-padded) tokens.
+        post_shuffle = self.multi_modal_projector.pixel_shuffle(vision_features)
+        features, _keep_mask, aux = self.script_controller(
+            vision_features, post_shuffle, lang_codes=lang_codes
+        )
+        projected = self.multi_modal_projector(features, pre_shuffled=True)
+        return projected, aux
 
     def _merge_image_features(
         self,
@@ -187,14 +230,18 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         labels: torch.LongTensor | None = None,
         use_cache: bool | None = None,
         cache_position: torch.LongTensor | None = None,
+        lang_codes: list[str] | None = None,
         **kwargs,
     ) -> TinyAyaVisionOutput:
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
         image_features = None
+        controller_aux: dict | None = None
         if pixel_values is not None and (input_ids == self.image_token_id).any():
-            image_features = self.get_image_features(pixel_values, image_grid_hws)
+            image_features, controller_aux = self.get_image_features(
+                pixel_values, image_grid_hws, lang_codes=lang_codes
+            )
             inputs_embeds = self._merge_image_features(
                 input_ids, inputs_embeds, image_features
             )
@@ -207,7 +254,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
                 1, 3, img_size, img_size,
                 device=inputs_embeds.device, dtype=inputs_embeds.dtype,
             )
-            dummy_feat = self.get_image_features(dummy_pixel)
+            dummy_feat, _ = self.get_image_features(dummy_pixel)
             if isinstance(dummy_feat, list):
                 dummy_feat = dummy_feat[0]
             inputs_embeds = inputs_embeds + (0.0 * dummy_feat.sum())
@@ -230,19 +277,24 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
             hidden_states=getattr(outputs, "hidden_states", None),
             attentions=getattr(outputs, "attentions", None),
             image_hidden_states=torch.cat(image_features, dim=0) if isinstance(image_features, list) else image_features,
+            controller_aux=controller_aux,
         )
 
     def _prepare_cache_for_generation(self, generation_config, model_kwargs, *args, **kwargs):
-        # Force DynamicCache instead of the HybridCache that Cohere2 normally
-        # uses. HybridCache triggers a static-cache compilation path inside
-        # generate() that is incompatible with the VLM wrapper's image-merging
-        # logic, causing an infinite hang during prefill.
-        from transformers import DynamicCache
+        # Cohere2 (Tiny Aya) defaults to HybridCache which triggers a static-cache
+        # compilation path incompatible with the VLM wrapper's image-merging logic
+        # and hangs during prefill. Force DynamicCache for that backbone only.
+        # Other backbones (e.g. Qwen3) use the stock DynamicCache path.
+        if self.config.backbone_type == "tiny_aya":
+            from transformers import DynamicCache
 
-        model_kwargs["past_key_values"] = DynamicCache(
-            config=self.config.get_text_config(decoder=True)
+            model_kwargs["past_key_values"] = DynamicCache(
+                config=self.config.get_text_config(decoder=True)
+            )
+            return model_kwargs
+        return super()._prepare_cache_for_generation(
+            generation_config, model_kwargs, *args, **kwargs
         )
-        return model_kwargs
 
     def prepare_inputs_for_generation(
         self,
@@ -288,7 +340,9 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
             and (input_ids == self.image_token_id).any()
         ):
             word_embeds = self.get_input_embeddings()(input_ids)
-            image_features = self.get_image_features(pixel_values, image_grid_hws)
+            image_features, _ = self.get_image_features(
+                pixel_values, image_grid_hws, lang_codes=kwargs.get("lang_codes")
+            )
             merged_embeds = self._merge_image_features(input_ids, word_embeds, image_features)
             model_inputs["inputs_embeds"] = merged_embeds
             model_inputs.pop("input_ids", None)

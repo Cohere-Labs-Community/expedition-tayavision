@@ -1,0 +1,17 @@
+backbone_type: qwen3
+llm_model_name: Qwen/Qwen3-4B-Instruct-2507
+llm_hidden_size: 2560
+llm_vocab_size: 151936
+num_llm_layers: 36
+connector_intermediate_size: 2560
+image_token: "<|image_pad|>"
+patch_chat_template: true
+torch_dtype: bfloat16
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj

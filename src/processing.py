@@ -95,7 +95,7 @@ class TinyAyaVisionProcessor(ProcessorMixin):
             num_tokens_after_shuffle = config.num_tokens_after_shuffle
             tokens_per_tile = config.tokens_per_tile
             in_token_limit = config.in_token_limit
-            patch_chat_template = "base" not in config.llm_model_name
+            patch_chat_template = getattr(config, "patch_chat_template", True)
 
         super().__init__(image_processor=image_processor, tokenizer=tokenizer)
 

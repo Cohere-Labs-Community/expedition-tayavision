@@ -168,9 +168,16 @@ def train(
 ):
     model.train()
     accumulated_loss = torch.tensor(0.0, device=device)
+    accumulated_rate_loss = torch.tensor(0.0, device=device)
+    accumulated_expected_tokens = torch.tensor(0.0, device=device)
     max_image_tokens_in_window = 0
     use_ddp = dist.is_initialized()
     is_main = (not use_ddp) or dist.get_rank() == 0
+
+    _raw_for_ctrl = model.module if hasattr(model, "module") else model
+    _ctrl_cfg = getattr(getattr(_raw_for_ctrl, "config", None), "controller_config", None) or {}
+    controller_enabled = bool(_ctrl_cfg.get("enabled", False))
+    controller_rate_lambda = float(_ctrl_cfg.get("rate_lambda", 0.0))
 
     # Accumulate generation samples across save steps
     generation_rows = []
@@ -228,6 +235,14 @@ def train(
                         use_cache=False,
                     )
                     loss = outputs.loss / training_config.grad_acc_steps
+                    if controller_enabled and outputs.controller_aux is not None:
+                        aux = outputs.controller_aux
+                        if "rate_loss" in aux:
+                            rate_term = aux["rate_loss"] / training_config.grad_acc_steps
+                            loss = loss + controller_rate_lambda * rate_term
+                            accumulated_rate_loss += rate_term.detach()
+                        if "expected_tokens" in aux:
+                            accumulated_expected_tokens += aux["expected_tokens"].mean().detach()
                 loss.backward()
             accumulated_loss += loss.detach()
 
@@ -280,6 +295,12 @@ def train(
                         "train/masked_pct": masked_pct,
                         "train/max_image_tokens": max_image_tokens_in_window,
                     }
+                    if controller_enabled:
+                        log_dict["train/rate_loss"] = accumulated_rate_loss.item()
+                        log_dict["train/expected_tokens"] = (
+                            accumulated_expected_tokens.item()
+                            / max(1, training_config.grad_acc_steps)
+                        )
 
                     if "projector_token" in norm_cache:
                         log_dict["norms/projector_token_mean"] = _pn_mean
@@ -318,6 +339,8 @@ def train(
                     wandb.log(log_dict, step=opt_step)
 
                 accumulated_loss.zero_()
+                accumulated_rate_loss.zero_()
+                accumulated_expected_tokens.zero_()
                 max_image_tokens_in_window = 0
 
     hook_handle.remove()
@@ -541,14 +564,34 @@ def run(cfg: DictConfig):
     lora_dict = training_dict.pop("lora", {})
     training_config = InstructConfig(**training_dict)
 
-    model_config = TinyAyaVisionConfig.for_encoder(
-        cfg.vision.vision_encoder_type, llm=cfg.llm
+    backbone_name = cfg.get("backbone", {}).get("backbone_type", "tiny_aya") \
+        if "backbone" in cfg else "tiny_aya"
+    model_config = TinyAyaVisionConfig.for_backbone(
+        backbone=backbone_name,
+        encoder=cfg.vision.vision_encoder_type,
     )
+    for group_name in ("vision", "backbone"):
+        if group_name in cfg:
+            for k, v in OmegaConf.to_container(cfg[group_name], resolve=True).items():
+                if hasattr(model_config, k):
+                    setattr(model_config, k, v)
+    if model_config.backbone_type == "tiny_aya":
+        model_config.llm_model_name = {
+            "base": "CohereLabs/tiny-aya-base",
+            "global": "CohereLabs/tiny-aya-global",
+        }[cfg.llm]
+    if "controller" in cfg:
+        model_config.controller_config = OmegaConf.to_container(
+            cfg.controller, resolve=True
+        )
 
     # Derive layers_to_transform from model config if not in yaml
     if "layers_to_transform" not in lora_dict:
         n = model_config.num_llm_layers
         lora_dict["layers_to_transform"] = list(range(n // 2, n))
+    # Carry per-backbone LoRA target modules if not explicitly set in YAML.
+    if "target_modules" not in lora_dict and model_config.lora_target_modules:
+        lora_dict["target_modules"] = list(model_config.lora_target_modules)
     lora_config = LoraAdapterConfig(**lora_dict)
 
     main(

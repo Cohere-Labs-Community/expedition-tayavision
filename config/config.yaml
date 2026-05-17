@@ -1,7 +1,9 @@
 defaults:
   - _self_
   - vision: siglip
+  - backbone: tiny_aya
   - training: instruct
+  - controller: "off"
 
 llm: global
 resume: null

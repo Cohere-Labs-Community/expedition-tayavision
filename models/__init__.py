@@ -12,6 +12,12 @@ from .tiny_aya_vision import TinyAyaVisionForConditionalGeneration, TinyAyaVisio
 if TYPE_CHECKING:
     pass
 
+# Generic alias — the VLM class is backbone-agnostic via config.backbone_type.
+# The Tiny Aya names are kept for checkpoint compatibility.
+VLMForConditionalGeneration = TinyAyaVisionForConditionalGeneration
+VLMConfig = TinyAyaVisionConfig
+VLMProcessor = TinyAyaVisionProcessor
+
 AutoConfig.register("tiny_aya_vision", TinyAyaVisionConfig)
 AutoModel.register(TinyAyaVisionConfig, TinyAyaVisionForConditionalGeneration)
 AutoModelForCausalLM.register(TinyAyaVisionConfig, TinyAyaVisionForConditionalGeneration)
@@ -44,5 +50,8 @@ __all__ = [
     "TinyAyaVisionConfig",
     "TinyAyaVisionForConditionalGeneration",
     "TinyAyaVisionOutput",
+    "VLMConfig",
+    "VLMForConditionalGeneration",
+    "VLMProcessor",
     "save_for_inference",
 ]

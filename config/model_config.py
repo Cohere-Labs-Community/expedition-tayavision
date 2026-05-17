@@ -32,10 +32,13 @@ class TinyAyaVisionConfig(PretrainedConfig):
         connector_intermediate_size: int = 2048,
         adapter_layer_norm_eps: float = 1e-6,
         post_projector_rms_norm: bool = False,
+        backbone_type: str = "tiny_aya",
         llm_model_name: str = "CohereLabs/tiny-aya-base",
         llm_hidden_size: int = 2048,
         llm_vocab_size: int = 262144,
         num_llm_layers: int = 36,
+        lora_target_modules: list[str] | None = None,
+        patch_chat_template: bool = True,
         image_token: str = "<image>",
         image_token_id: int | None = None,
         torch_dtype: str = "bfloat16",
@@ -44,6 +47,7 @@ class TinyAyaVisionConfig(PretrainedConfig):
         cache_dir: str | None = None,
         text_config: dict | None = None,
         vision_tower_config: dict | None = None,
+        controller_config: dict | None = None,
         **kwargs,
     ):
         self.vision_encoder_type = vision_encoder_type
@@ -64,10 +68,16 @@ class TinyAyaVisionConfig(PretrainedConfig):
         self.connector_intermediate_size = connector_intermediate_size
         self.adapter_layer_norm_eps = adapter_layer_norm_eps
         self.post_projector_rms_norm = post_projector_rms_norm
+        self.backbone_type = backbone_type
         self.llm_model_name = llm_model_name
         self.llm_hidden_size = llm_hidden_size
         self.llm_vocab_size = llm_vocab_size
         self.num_llm_layers = num_llm_layers
+        self.lora_target_modules = lora_target_modules or [
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ]
+        self.patch_chat_template = patch_chat_template
         self.image_token = image_token
         self.image_token_id = image_token_id
         self.vision_feature_layer = vision_feature_layer
@@ -77,6 +87,7 @@ class TinyAyaVisionConfig(PretrainedConfig):
         self.cache_dir = cache_dir or None
         self.text_config = text_config
         self.vision_tower_config = vision_tower_config
+        self.controller_config = controller_config
         self._text_config_obj = None
         super().__init__(torch_dtype=torch_dtype, **kwargs)
 
@@ -116,37 +127,73 @@ class TinyAyaVisionConfig(PretrainedConfig):
         return cls(llm_model_name="CohereLabs/tiny-aya-global")
 
     @classmethod
-    def for_encoder(cls, encoder: str, llm: str = "base") -> TinyAyaVisionConfig:
-        """Load config from config/vision/<encoder>.yaml and merge with defaults.
+    def for_backbone(
+        cls, backbone: str = "tiny_aya", encoder: str = "siglip"
+    ) -> TinyAyaVisionConfig:
+        """Compose vision + backbone YAML overrides into one config.
 
-        Args:
-            encoder: Vision encoder name — "siglip" or "moonvit".
-            llm: LLM variant — "base" or "global".
+        Loads ``config/vision/<encoder>.yaml`` first, then overlays
+        ``config/backbone/<backbone>.yaml`` on top. Backbone fields take
+        precedence over vision fields for any shared key.
 
         Example:
-            config = TinyAyaVisionConfig.for_encoder("moonvit")
-            config = TinyAyaVisionConfig.for_encoder("siglip", llm="global")
+            cfg = TinyAyaVisionConfig.for_backbone("qwen3", "siglip")
+            cfg = TinyAyaVisionConfig.for_backbone("tiny_aya")
         """
-        yaml_path = Path(__file__).parent / "vision" / f"{encoder}.yaml"
-        if not yaml_path.exists():
-            available = [p.stem for p in yaml_path.parent.glob("*.yaml")]
-            raise FileNotFoundError(
-                f"No vision config for '{encoder}' at {yaml_path}. "
-                f"Available: {available}"
-            )
-
-        with open(yaml_path) as f:
-            overrides = yaml.safe_load(f)
-
         sig = inspect.signature(cls.__init__)
         valid_fields = set(sig.parameters.keys()) - {"self", "kwargs"}
-        filtered = {k: v for k, v in overrides.items() if k in valid_fields}
 
-        llm_names = {
-            "base": "CohereLabs/tiny-aya-base",
-            "global": "CohereLabs/tiny-aya-global",
-        }
-        if llm not in llm_names:
-            raise ValueError(f"llm must be 'base' or 'global', got '{llm}'")
+        merged: dict = {}
+        for group, name in (("vision", encoder), ("backbone", backbone)):
+            yaml_path = Path(__file__).parent / group / f"{name}.yaml"
+            if not yaml_path.exists():
+                available = [p.stem for p in yaml_path.parent.glob("*.yaml")]
+                raise FileNotFoundError(
+                    f"No {group} config for '{name}' at {yaml_path}. "
+                    f"Available: {available}"
+                )
+            with open(yaml_path) as f:
+                overrides = yaml.safe_load(f) or {}
+            merged.update({k: v for k, v in overrides.items() if k in valid_fields})
 
-        return cls(**filtered, llm_model_name=llm_names[llm])
+        return cls(**merged)
+
+    # Deprecated — superseded by ``for_backbone(backbone, encoder)``.
+    # Kept (commented) for reference while we migrate remaining callers
+    # (tests/test_vision_encoder.py, docstring in src/processing.py).
+    #
+    # @classmethod
+    # def for_encoder(cls, encoder: str, llm: str = "base") -> TinyAyaVisionConfig:
+    #     """Load config from config/vision/<encoder>.yaml and merge with defaults.
+    #
+    #     Args:
+    #         encoder: Vision encoder name — "siglip" or "moonvit".
+    #         llm: LLM variant — "base" or "global".
+    #
+    #     Example:
+    #         config = TinyAyaVisionConfig.for_encoder("moonvit")
+    #         config = TinyAyaVisionConfig.for_encoder("siglip", llm="global")
+    #     """
+    #     yaml_path = Path(__file__).parent / "vision" / f"{encoder}.yaml"
+    #     if not yaml_path.exists():
+    #         available = [p.stem for p in yaml_path.parent.glob("*.yaml")]
+    #         raise FileNotFoundError(
+    #             f"No vision config for '{encoder}' at {yaml_path}. "
+    #             f"Available: {available}"
+    #         )
+    #
+    #     with open(yaml_path) as f:
+    #         overrides = yaml.safe_load(f)
+    #
+    #     sig = inspect.signature(cls.__init__)
+    #     valid_fields = set(sig.parameters.keys()) - {"self", "kwargs"}
+    #     filtered = {k: v for k, v in overrides.items() if k in valid_fields}
+    #
+    #     llm_names = {
+    #         "base": "CohereLabs/tiny-aya-base",
+    #         "global": "CohereLabs/tiny-aya-global",
+    #     }
+    #     if llm not in llm_names:
+    #         raise ValueError(f"llm must be 'base' or 'global', got '{llm}'")
+    #
+    #     return cls(**filtered, llm_model_name=llm_names[llm])
