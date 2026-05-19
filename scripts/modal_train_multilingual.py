@@ -122,12 +122,17 @@ def build_hydra_overrides(
     batch_size: int,
     learning_rate: float,
     num_epochs: int,
+    backbone: str = "qwen3",
+    controller: str = "off",
     resume_run_id: str | None = None,
     instruct_checkpoint: str | None = None,
     alignment_checkpoint: str | None = None,
+    debug_steps: int | None = None,
 ) -> list[str]:
     """Build Hydra override list from training parameters."""
     overrides = [
+        f"backbone={backbone}",
+        f"controller={controller}",
         "training=multilingual_instruct",
         # Override paths for Modal volume structure
         "training.models_dir=/models",
@@ -148,6 +153,17 @@ def build_hydra_overrides(
         overrides.append(f"training.alignment_checkpoint={alignment_checkpoint}")
     if resume_run_id:
         overrides.append(f"resume={resume_run_id}")
+
+    if debug_steps is not None:
+        # Smoke-test recipe from 2026-05-16_pivot_run_commands.md.
+        # NOTE: `+debug.steps` requires the pipeline `train()` to read
+        # cfg.debug.steps for early termination. See the run-commands doc.
+        overrides.extend([
+            "training.batch_size=4",
+            "training.grad_acc_steps=1",
+            "training.save_steps=20",
+            f"+debug.steps={debug_steps}",
+        ])
 
     return overrides
 
@@ -180,6 +196,9 @@ def print_training_banner(
     learning_rate: float,
     resume_run_id: str | None,
     instruct_checkpoint: str | None,
+    backbone: str = "qwen3",
+    controller: str = "off",
+    debug_steps: int | None = None,
 ) -> None:
     """Print training configuration banner."""
     print("=" * 60)
@@ -187,6 +206,8 @@ def print_training_banner(
     print("=" * 60)
     print(f"GPU: {GPU_TYPE} x {num_gpus}")
     print(f"Mode: {'DDP (torchrun)' if num_gpus > 1 else 'Single GPU'}")
+    print(f"Backbone: {backbone}")
+    print(f"Controller: {controller}")
     print(f"Total samples: {total_samples:,}")
     print(f"English ratio: {english_ratio:.0%}")
     print(f"Temperature: {temperature}")
@@ -196,6 +217,7 @@ def print_training_banner(
     print(f"Learning rate: {learning_rate}")
     print(f"Resume run: {resume_run_id or 'None'}")
     print(f"Instruct checkpoint: {instruct_checkpoint or 'None'}")
+    print(f"Debug steps: {debug_steps or 'off (full run)'}")
     print("=" * 60)
 
 
@@ -221,6 +243,9 @@ def train(
     batch_size: int = 64,
     learning_rate: float = 2e-5,
     num_epochs: int = 1,
+    backbone: str = "qwen3",
+    controller: str = "off",
+    debug_steps: int | None = None,
 ):
     """Run single-GPU multilingual multimodal instruction finetuning.
 
@@ -234,6 +259,9 @@ def train(
         batch_size: Global batch size (default: 64).
         learning_rate: Learning rate for LoRA adapters (default: 2e-5).
         num_epochs: Number of training epochs (default: 1).
+        backbone: LLM backbone (qwen3 or tiny_aya).
+        controller: Script-conditioned controller variant (off / b1 / b2 / b3).
+        debug_steps: If set, smoke-test recipe (batch_size=4, N steps).
     """
     import sys
 
@@ -261,6 +289,9 @@ def train(
         learning_rate=learning_rate,
         resume_run_id=resume_run_id,
         instruct_checkpoint=instruct_checkpoint,
+        backbone=backbone,
+        controller=controller,
+        debug_steps=debug_steps,
     )
 
     overrides = build_hydra_overrides(
@@ -270,9 +301,12 @@ def train(
         batch_size=batch_size,
         learning_rate=learning_rate,
         num_epochs=num_epochs,
+        backbone=backbone,
+        controller=controller,
         resume_run_id=resume_run_id,
         instruct_checkpoint=instruct_checkpoint,
         alignment_checkpoint=alignment_checkpoint,
+        debug_steps=debug_steps,
     )
 
     # Initialize Hydra and compose config
@@ -355,6 +389,9 @@ def train_ddp_2gpu(
     batch_size: int = 128,
     learning_rate: float = 2e-5,
     num_epochs: int = 1,
+    backbone: str = "qwen3",
+    controller: str = "off",
+    debug_steps: int | None = None,
 ):
     """Run 2-GPU DDP multilingual training via torchrun."""
     _run_ddp_training(
@@ -368,6 +405,9 @@ def train_ddp_2gpu(
         batch_size=batch_size,
         learning_rate=learning_rate,
         num_epochs=num_epochs,
+        backbone=backbone,
+        controller=controller,
+        debug_steps=debug_steps,
     )
 
 
@@ -388,6 +428,9 @@ def train_ddp_4gpu(
     batch_size: int = 256,
     learning_rate: float = 2e-5,
     num_epochs: int = 1,
+    backbone: str = "qwen3",
+    controller: str = "off",
+    debug_steps: int | None = None,
 ):
     """Run 4-GPU DDP multilingual training via torchrun."""
     _run_ddp_training(
@@ -401,6 +444,9 @@ def train_ddp_4gpu(
         batch_size=batch_size,
         learning_rate=learning_rate,
         num_epochs=num_epochs,
+        backbone=backbone,
+        controller=controller,
+        debug_steps=debug_steps,
     )
 
 
@@ -421,6 +467,9 @@ def train_ddp_8gpu(
     batch_size: int = 512,
     learning_rate: float = 2e-5,
     num_epochs: int = 1,
+    backbone: str = "qwen3",
+    controller: str = "off",
+    debug_steps: int | None = None,
 ):
     """Run 8-GPU DDP multilingual training via torchrun."""
     _run_ddp_training(
@@ -434,6 +483,9 @@ def train_ddp_8gpu(
         batch_size=batch_size,
         learning_rate=learning_rate,
         num_epochs=num_epochs,
+        backbone=backbone,
+        controller=controller,
+        debug_steps=debug_steps,
     )
 
 
@@ -448,6 +500,9 @@ def _run_ddp_training(
     batch_size: int,
     learning_rate: float,
     num_epochs: int,
+    backbone: str = "qwen3",
+    controller: str = "off",
+    debug_steps: int | None = None,
 ):
     """Internal function to run DDP training via torchrun subprocess.
 
@@ -472,6 +527,9 @@ def _run_ddp_training(
         learning_rate=learning_rate,
         resume_run_id=resume_run_id,
         instruct_checkpoint=instruct_checkpoint,
+        backbone=backbone,
+        controller=controller,
+        debug_steps=debug_steps,
     )
 
     # Build Hydra overrides as command-line arguments
@@ -482,9 +540,12 @@ def _run_ddp_training(
         batch_size=batch_size,
         learning_rate=learning_rate,
         num_epochs=num_epochs,
+        backbone=backbone,
+        controller=controller,
         resume_run_id=resume_run_id,
         instruct_checkpoint=instruct_checkpoint,
         alignment_checkpoint=alignment_checkpoint,
+        debug_steps=debug_steps,
     )
 
     # Add data_dir overrides for Modal volume paths
@@ -537,6 +598,9 @@ def main(
     learning_rate: float = 2e-5,
     num_epochs: int = 1,
     num_gpus: int = 1,
+    backbone: str = "qwen3",
+    controller: str = "off",
+    debug_steps: int = None,
 ):
     """Local entrypoint for Modal CLI.
 
@@ -544,6 +608,9 @@ def main(
         num_gpus: Number of GPUs for training (1, 2, 4, or 8).
             - 1: Single GPU (default)
             - 2/4/8: Multi-GPU DDP via torchrun
+        backbone: LLM backbone (qwen3 or tiny_aya).
+        controller: Script-conditioned controller variant (off / b1 / b2 / b3).
+        debug_steps: If set, smoke-test recipe (batch_size=4, N steps).
 
     All other arguments are forwarded to the training function.
     """
@@ -562,6 +629,9 @@ def main(
         batch_size=batch_size,
         learning_rate=learning_rate,
         num_epochs=num_epochs,
+        backbone=backbone,
+        controller=controller,
+        debug_steps=debug_steps,
     )
 
     if num_gpus == 1:

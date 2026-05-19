@@ -57,43 +57,62 @@ def resolve_backbone_model_name(backbone: str) -> str:
 def iter_flores200_devsets(max_languages: int | None = None):
     """Yield ``(lang_code, sentences)`` from FLORES-200 dev split.
 
-    Tries the ``openlanguagedata/flores_plus`` HF dataset first, falling
-    back to ``facebook/flores`` if unavailable.
+    Uses ``openlanguagedata/flores_plus`` (a parquet mirror that works with
+    ``datasets>=3.0``). Older mirrors (``facebook/flores``,
+    ``Muennighoff/flores200``, ``gsarti/flores_101``) ship a loader script
+    and are unusable on datasets>=3.0, so we don't bother trying them.
     """
     from datasets import load_dataset
 
-    last_err = None
-    for hf_id in ("openlanguagedata/flores_plus", "facebook/flores"):
-        try:
-            ds = load_dataset(hf_id, split="dev")
-            break
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-    else:
+    hf_id = "openlanguagedata/flores_plus"
+    try:
+        ds = load_dataset(hf_id, split="dev", token=True)
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+        if "gated dataset" in msg or "is gated" in msg or "401" in msg:
+            raise RuntimeError(
+                f"{hf_id} is gated. Accept the dataset license at "
+                f"https://huggingface.co/datasets/{hf_id} (one-time click), "
+                "ensure `huggingface-cli login` (or HF_TOKEN) is set, then re-run."
+            ) from e
         raise RuntimeError(
-            "Could not load FLORES dataset from any known source"
-        ) from last_err
+            f"Failed to load {hf_id}: {type(e).__name__}: {msg}"
+        ) from e
 
-    # The two datasets disagree on column names. Detect the language column
-    # and the text column dynamically.
+    # flores_plus exposes ISO-639-3 (lang) and ISO-15924 (script) separately;
+    # combine them into the FLORES-200 ``lang_Script`` code that the
+    # downstream FertilityTable consumer expects.
     cols = ds.column_names
+    text_col = next((c for c in ("text", "sentence") if c in cols), None)
+    if text_col is None:
+        raise RuntimeError(
+            f"FLORES dataset has no text column (got {cols}) — update the iter helper"
+        )
+    has_split_codes = "iso_639_3" in cols and "iso_15924" in cols
     lang_col = next(
         (c for c in ("iso_639_3", "language", "lang", "id") if c in cols), None
     )
-    text_col = next(
-        (c for c in ("text", "sentence") if c in cols), None
-    )
-    if lang_col is None or text_col is None:
+    if lang_col is None:
         raise RuntimeError(
-            f"FLORES dataset columns {cols} unrecognised — update the iter helper"
+            f"FLORES dataset has no language column (got {cols}) — update the iter helper"
         )
 
     grouped: dict[str, list[str]] = defaultdict(list)
     for row in ds:
-        lang = row[lang_col]
         text = row[text_col]
-        if isinstance(lang, str) and isinstance(text, str):
-            grouped[lang].append(text)
+        if not isinstance(text, str):
+            continue
+        if has_split_codes:
+            iso_lang = row.get("iso_639_3")
+            iso_script = row.get("iso_15924")
+            if not (isinstance(iso_lang, str) and isinstance(iso_script, str)):
+                continue
+            code = f"{iso_lang}_{iso_script}"
+        else:
+            code = row.get(lang_col)
+            if not isinstance(code, str):
+                continue
+        grouped[code].append(text)
 
     items = list(grouped.items())
     if max_languages is not None:

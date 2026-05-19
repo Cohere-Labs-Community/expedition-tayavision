@@ -318,6 +318,8 @@ class TinyAyaVisionProcessor(ProcessorMixin):
         for i, t in enumerate(text):
             n = tokens_per_img[i] if i < len(tokens_per_img) else tokens_per_img[0]
             placeholder = self.image_token * n
+            if self.image_token != "<image>":
+                t = t.replace("<image>", self.image_token)
             expanded_text.append(t.replace(self.image_token, placeholder))
 
         # Tokenize

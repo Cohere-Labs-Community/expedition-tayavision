@@ -109,7 +109,7 @@ def generate_samples(
 
             if has_image and (prompt_ids == raw.image_token_id).any():
                 pixel_values = batch["pixel_values"][i].unsqueeze(0).to(device)
-                image_features = raw.get_image_features(pixel_values)
+                image_features, _ = raw.get_image_features(pixel_values)
                 inputs_embeds = raw._merge_image_features(
                     prompt_ids, inputs_embeds, image_features,
                 )

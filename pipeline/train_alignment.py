@@ -86,7 +86,7 @@ def generate_samples(
 
         with torch.autocast("cuda", dtype=compute_dtype):
             inputs_embeds = raw.get_input_embeddings()(prompt_ids)
-            image_features = raw.get_image_features(pixel_values)
+            image_features, _ = raw.get_image_features(pixel_values)
             inputs_embeds = raw._merge_image_features(
                 prompt_ids, inputs_embeds, image_features,
             )

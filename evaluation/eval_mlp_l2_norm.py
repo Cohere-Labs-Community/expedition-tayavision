@@ -17,7 +17,7 @@ def main(num_per_class=1):
     )["pixel_values"].to(device).to(torch.bfloat16)
 
     with torch.no_grad():
-        mlp_out = model.get_image_features(pixel_values)
+        mlp_out, _ = model.get_image_features(pixel_values)
         emb_matrix = model.language_model.get_input_embeddings().weight.detach()
 
     token_norms = mlp_out.float().norm(dim=-1)

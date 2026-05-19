@@ -50,7 +50,12 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
         if config.vision_tower_config is None:
             config.vision_tower_config = self.vision_encoder.vision_model.config.to_dict()
 
-        self.multi_modal_projector = create_projector(config).to(config.torch_dtype)
+        compute_dtype = (
+            getattr(torch, config.torch_dtype)
+            if isinstance(config.torch_dtype, str)
+            else config.torch_dtype
+        )
+        self.multi_modal_projector = create_projector(config).to(compute_dtype)
 
         if config.text_config is not None:
             from transformers import CONFIG_MAPPING
@@ -88,7 +93,7 @@ class TinyAyaVisionForConditionalGeneration(PreTrainedModel, GenerationMixin):
                 vision_hidden_size=config.vision_hidden_size,
                 cfg=ctrl_cfg,
                 fertility_table=fertility,
-            ).to(config.torch_dtype)
+            ).to(compute_dtype)
 
         self.post_init()
 

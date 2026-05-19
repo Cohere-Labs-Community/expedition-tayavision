@@ -1,5 +1,7 @@
+import io
 import json
 import os
+import zipfile
 import torch
 
 from pathlib import Path
@@ -26,6 +28,10 @@ class AlignmentDataset(torch.utils.data.Dataset):
     """
     Dataset for aligning vision encoder w/LLM backbone via a learned connector.
     LLaVA-Pretrain dataset with image-caption pairs.
+
+    Reads images directly from `images.zip` if present (avoids the 500k-inode
+    quota on the Modal volume — 558k extracted files won't fit). Falls back to
+    extracted files on disk when the zip isn't there.
     """
     def __init__(
         self,
@@ -42,13 +48,30 @@ class AlignmentDataset(torch.utils.data.Dataset):
             config=config,
         )
 
+        zip_path = self.data_dir / "images.zip"
+        self._zip_path: Path | None = zip_path if zip_path.exists() else None
+        # ZipFile handles are not safe to share across processes — lazy-init
+        # per-worker, keyed by pid so forked DataLoader workers each open their own.
+        self._zip: zipfile.ZipFile | None = None
+        self._zip_pid: int | None = None
+        if self._zip_path is not None:
+            print(f"Reading images from zip: {self._zip_path}")
+
+    def _open_image(self, rel_path: str) -> Image.Image:
+        if self._zip_path is None:
+            return Image.open(self.data_dir / rel_path).convert("RGB")
+        pid = os.getpid()
+        if self._zip is None or self._zip_pid != pid:
+            self._zip = zipfile.ZipFile(self._zip_path, "r")
+            self._zip_pid = pid
+        return Image.open(io.BytesIO(self._zip.read(rel_path))).convert("RGB")
+
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
         item = self.dataset[idx]
-        image_path = self.data_dir / item["image"]
-        image = Image.open(image_path).convert("RGB")
+        image = self._open_image(item["image"])
 
         prompt = item["conversations"][0]["value"]
         response = item["conversations"][1]["value"]

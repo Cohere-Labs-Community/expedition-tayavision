@@ -54,7 +54,7 @@ def main(top_k=10, num_per_class=1):
     )["pixel_values"].to(device).to(torch.bfloat16)
 
     with torch.no_grad():
-        image_embeddings = model.get_image_features(pixel_values)
+        image_embeddings, _ = model.get_image_features(pixel_values)
         embedding_matrix = model.language_model.get_input_embeddings().weight.detach()
 
     top_tokens = get_top_k_tokens(image_embeddings, embedding_matrix, processor.tokenizer, top_k)
