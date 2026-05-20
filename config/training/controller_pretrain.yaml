@@ -1,0 +1,50 @@
+# Stage-1 controller pre-training config.
+#
+# Trains only the script_controller MLP (everything else frozen) on a
+# language-balanced subsample drawn from the same sources as the
+# multilingual_instruct recipe. Inherits the multilingual_sources block
+# from multilingual_instruct.yaml and overrides the mixing parameters
+# so the dataset is ~uniform-per-language.
+#
+# Achieved per-language balance:
+#   - english_ratio = 0.015 (~1/N_langs, no English dominance)
+#   - temperature = 1.0e6 (effectively uniform after temperature scaling)
+#   - allow_upsampling = True so low-resource languages get padded to
+#     hit the per-language target via replacement sampling.
+defaults:
+  - multilingual_instruct
+  - _self_
+
+# ── Stage-1 mixing overrides ─────────────────────────────────────────
+total_samples: 49000          # ~700 × ~70 languages
+english_ratio: 0.015          # ≈ 1/N_langs (uniform target)
+temperature: 1.0e6            # effectively uniform across non-English
+allow_upsampling: true
+max_upsample_factor: 50.0     # allow heavy replication for tiny pools
+
+# ── Stage-1 training overrides ───────────────────────────────────────
+num_epochs: 10
+batch_size: 16
+grad_acc_steps: 1
+learning_rate: 1.0e-3
+warmup_ratio: 0.03
+weight_decay: 0.0
+lr_scheduler_type: "cosine"
+max_grad_norm: 1.0
+num_workers: 4
+
+# Single GPU; no DDP cross-rank timeout needed.
+nccl_timeout_minutes: 30
+
+# Stage 1 writes only a controller-state checkpoint (controller_<step>.pt)
+# to this directory. NOT a full projector+LoRA checkpoint.
+models_dir: "/data/model_ckpts/controller_pretrain_ckpts"
+save_steps: 200
+logging_steps: 10
+seed: 42
+
+# Stage 1 reads the projector + LoRA state from the same instruct
+# checkpoint that stage 2 will use, so both arms fork from the same
+# downstream weights.
+alignment_checkpoint: ""
+instruct_checkpoint: "/data/model_ckpts/instruct_ckpts/664e72e8-f3a0-4278-87b4-0632ed353cdf/checkpoint_9754.pt"

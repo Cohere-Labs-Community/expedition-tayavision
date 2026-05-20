@@ -1,6 +1,6 @@
 enabled: true
 variant: B3
-target_tokens: 196
+target_tokens: 98
 rate_lambda: 0.1
 fairness_lambda: 0.05
 use_gumbel: true
@@ -8,3 +8,4 @@ gumbel_tau: 1.0
 fertility_table_path: data/fertility/${backbone.backbone_type}.json
 compression_levels: [2, 4, 8]
 fairness_eval_steps: 500
+controller_lr_multiplier: 0.1

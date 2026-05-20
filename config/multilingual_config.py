@@ -32,6 +32,11 @@ class MultilingualInstructConfig(InstructConfig):
     # Path to instruct checkpoint (.pt) to initialise projector + LoRA from
     instruct_checkpoint: str = ""
 
+    # Path to a Stage-1 controller checkpoint (controller_<step>.pt) holding
+    # only script_controller.state_dict(). Loaded after the instruct
+    # checkpoint, before optimizer setup. Empty string disables the load.
+    controller_checkpoint: str = ""
+
     # HuggingFace cache directory for downloaded datasets
     hf_cache_dir: str = ""
 

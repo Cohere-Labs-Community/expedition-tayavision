@@ -233,6 +233,7 @@ def train(
                         pixel_values=pixel_values,
                         labels=labels,
                         use_cache=False,
+                        lang_codes=batch.get("lang_codes"),
                     )
                     loss = outputs.loss / training_config.grad_acc_steps
                     if controller_enabled and outputs.controller_aux is not None:

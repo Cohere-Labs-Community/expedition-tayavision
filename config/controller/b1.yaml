@@ -1,6 +1,6 @@
 enabled: true
 variant: B1
-target_tokens: 196
+target_tokens: 98
 rate_lambda: 0.1
 fairness_lambda: 0.0
 use_gumbel: false
@@ -8,3 +8,7 @@ gumbel_tau: 1.0
 fertility_table_path: data/fertility/${backbone.backbone_type}.json
 compression_levels: [2, 4, 8]
 fairness_eval_steps: 500
+# Stage-2 only: controller param-group LR as a fraction of base LR.
+# 0.1 preserves the Stage-1 pre-trained policy while allowing fine
+# adjustments under the joint multilingual recipe.
+controller_lr_multiplier: 0.1

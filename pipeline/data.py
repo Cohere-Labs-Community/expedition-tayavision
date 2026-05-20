@@ -299,6 +299,10 @@ class InstructDataset(torch.utils.data.Dataset):
             "attention_mask": attention_mask,
             "pixel_values": processed["pixel_values"].squeeze(0) if has_image else None,
             "labels": labels,
+            # LLaVA-Instruct is English-only; tag samples so the SCTAC
+            # controller receives a (constant for this dataset) language
+            # signal. Multilingual training overrides this per-sample.
+            "lang_code": "en",
         }
         return result
 
@@ -339,6 +343,13 @@ def collate_fn(
         "pixel_values": pixel_values,
         "labels": labels,
     }
+    # Forward per-sample language codes as a Python list so the SCTAC
+    # controller can score per-language compression budgets. Datasets
+    # that don't emit ``lang_code`` (e.g. AlignmentDataset) skip this
+    # field; downstream callers pass ``lang_codes=None`` which the
+    # controller treats as a neutral signal.
+    if "lang_code" in batch[0]:
+        result["lang_codes"] = [item["lang_code"] for item in batch]
     if "image_grid_hws" in batch[0]:
         result["image_grid_hws"] = torch.stack([item["image_grid_hws"] for item in batch])
     return result

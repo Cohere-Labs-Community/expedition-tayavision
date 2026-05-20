@@ -176,6 +176,22 @@ def main(
         if is_main:
             print(f"Loaded projector from {training_config.alignment_checkpoint}")
 
+    # Optionally seed the script_controller from a Stage-1 pre-training run.
+    # The checkpoint holds only script_controller.state_dict() — strict=True
+    # so a shape mismatch fails loudly rather than silently no-op'ing.
+    if getattr(training_config, "controller_checkpoint", ""):
+        if model.script_controller is None:
+            raise RuntimeError(
+                "controller_checkpoint was set but the controller is disabled. "
+                "Use controller=b1 (or b2/b3) to enable it before loading."
+            )
+        ctrl_state = torch.load(
+            training_config.controller_checkpoint, map_location="cpu", weights_only=True,
+        )
+        model.script_controller.load_state_dict(ctrl_state, strict=True)
+        if is_main:
+            print(f"Loaded Stage-1 controller from {training_config.controller_checkpoint}")
+
     model.to(device, non_blocking=True)
 
     processor = TinyAyaVisionProcessor(config=model_config)
@@ -267,9 +283,16 @@ def main(
         drop_last=False,
     )
 
-    # Optimizer
+    # Optimizer — Stage-2 reads controller_lr_multiplier from the controller
+    # config so a pre-trained controller can be fine-tuned at a fraction of
+    # the LoRA LR. Defaults to 1.0 (no separation) when the field is absent.
+    ctrl_cfg_dict = getattr(model_config, "controller_config", None) or {}
+    controller_lr_mult = float(ctrl_cfg_dict.get("controller_lr_multiplier", 1.0))
     param_groups = get_lora_optimizer_groups(
-        model, training_config.learning_rate, lora_config,
+        model,
+        training_config.learning_rate,
+        lora_config,
+        controller_lr_multiplier=controller_lr_mult,
     )
     opt = torch.optim.AdamW(
         param_groups,

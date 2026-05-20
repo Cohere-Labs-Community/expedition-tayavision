@@ -1286,6 +1286,7 @@ class MultilingualInstructDataset(torch.utils.data.Dataset):
             "attention_mask": attention_mask,
             "pixel_values": processed["pixel_values"].squeeze(0) if "pixel_values" in processed else None,
             "labels": labels,
+            "lang_code": src.get_language(example),
         }
         return result
 
@@ -1304,4 +1305,5 @@ class MultilingualInstructDataset(torch.utils.data.Dataset):
             "attention_mask": attention_mask,
             "pixel_values": None,
             "labels": labels,
+            "lang_code": "en",
         }

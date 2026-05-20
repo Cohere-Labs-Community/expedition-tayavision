@@ -90,27 +90,35 @@ def get_lora_optimizer_groups(
     model: nn.Module,
     base_lr: float,
     lora_config: LoraAdapterConfig,
+    controller_lr_multiplier: float = 1.0,
 ) -> list[dict]:
     """Build optimizer parameter groups with optional differential LRs.
 
-    Splits trainable parameters into three groups:
-      - "lora_A"  LoRA down-projection (input → rank): lr = base_lr * lora_a_lr_multiplier
-      - "lora_B"  LoRA up-projection   (rank → output): lr = base_lr * lora_b_lr_multiplier
-      - "other"   Remaining trainable params (connector, enabled biases): lr = base_lr
+    Splits trainable parameters into four groups:
+      - "lora_A"     LoRA down-projection: lr = base_lr * lora_a_lr_multiplier
+      - "lora_B"     LoRA up-projection:   lr = base_lr * lora_b_lr_multiplier
+      - "controller" script_controller.*:  lr = base_lr * controller_lr_multiplier
+      - "other"      Remaining trainable params (connector, biases): lr = base_lr
 
-    When lora_a_lr_multiplier == lora_b_lr_multiplier == 1.0, all groups share
-    base_lr and behaviour is equivalent to a single optimizer param group.
+    The "controller" group is detected by ``"script_controller" in name``.
+    When ``controller_lr_multiplier == 1.0`` it behaves identically to lumping
+    those params into "other". When the model has no controller, the group
+    is empty (still returned for shape-stable downstream code).
 
     Args:
         model:       Model returned by apply_lora() (or any nn.Module).
         base_lr:     Base learning rate.
         lora_config: Used for lr multiplier values.
+        controller_lr_multiplier: Scales LR for the script_controller group.
+            Recommended 0.1 in Stage-2 multilingual runs so the Stage-1
+            pre-trained policy isn't overrun by the dominant-class signal.
 
     Returns:
         List of dicts suitable for passing to torch.optim.AdamW(groups, ...).
     """
     lora_a_params: list[nn.Parameter] = []
     lora_b_params: list[nn.Parameter] = []
+    controller_params: list[nn.Parameter] = []
     other_params: list[nn.Parameter] = []
 
     for name, param in model.named_parameters():
@@ -120,6 +128,8 @@ def get_lora_optimizer_groups(
             lora_a_params.append(param)
         elif "lora_B" in name:
             lora_b_params.append(param)
+        elif "script_controller" in name:
+            controller_params.append(param)
         else:
             other_params.append(param)
 
@@ -133,6 +143,11 @@ def get_lora_optimizer_groups(
             "params": lora_b_params,
             "lr": base_lr * lora_config.lora_b_lr_multiplier,
             "name": "lora_B",
+        },
+        {
+            "params": controller_params,
+            "lr": base_lr * controller_lr_multiplier,
+            "name": "controller",
         },
         {
             "params": other_params,

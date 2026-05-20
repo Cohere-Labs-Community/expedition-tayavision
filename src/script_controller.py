@@ -72,6 +72,33 @@ class ScriptControllerConfig:
         }
 
 
+# ISO 639-1 → FLORES-200 default mapping for the languages covered by the
+# Tiny Aya / Qwen3 multilingual training mix. Used by FertilityTable to
+# resolve dataset-side ISO-2 codes (e.g. ``en``) into the FLORES-200 keys
+# (e.g. ``eng_Latn``) emitted by ``scripts/compute_fertility_table.py``.
+# When a language has multiple scripts in active use (Chinese, Serbian),
+# we map to the most common script for the training corpora at hand.
+_ISO2_TO_FLORES200: dict[str, str] = {
+    "en": "eng_Latn", "fr": "fra_Latn", "es": "spa_Latn", "pt": "por_Latn",
+    "it": "ita_Latn", "de": "deu_Latn", "nl": "nld_Latn", "ru": "rus_Cyrl",
+    "pl": "pol_Latn", "uk": "ukr_Cyrl", "cs": "ces_Latn", "ro": "ron_Latn",
+    "hu": "hun_Latn", "fi": "fin_Latn", "sv": "swe_Latn", "da": "dan_Latn",
+    "no": "nob_Latn", "el": "ell_Grek", "tr": "tur_Latn", "ar": "arb_Arab",
+    "fa": "pes_Arab", "he": "heb_Hebr", "hi": "hin_Deva", "bn": "ben_Beng",
+    "mr": "mar_Deva", "gu": "guj_Gujr", "pa": "pan_Guru", "ta": "tam_Taml",
+    "te": "tel_Telu", "ur": "urd_Arab", "ne": "npi_Deva", "zh": "zho_Hans",
+    "ja": "jpn_Jpan", "ko": "kor_Hang", "vi": "vie_Latn", "th": "tha_Thai",
+    "id": "ind_Latn", "ms": "zsm_Latn", "tl": "tgl_Latn", "jv": "jav_Latn",
+    "lo": "lao_Laoo", "my": "mya_Mymr", "km": "khm_Khmr", "sw": "swh_Latn",
+    "yo": "yor_Latn", "ha": "hau_Latn", "ig": "ibo_Latn", "am": "amh_Ethi",
+    "sn": "sna_Latn", "zu": "zul_Latn", "xh": "xho_Latn", "wo": "wol_Latn",
+    "mg": "plt_Latn", "ca": "cat_Latn", "gl": "glg_Latn", "eu": "eus_Latn",
+    "cy": "cym_Latn", "ga": "gle_Latn", "hr": "hrv_Latn", "sr": "srp_Cyrl",
+    "sk": "slk_Latn", "sl": "slv_Latn", "bg": "bul_Cyrl", "lv": "lvs_Latn",
+    "lt": "lit_Latn", "et": "est_Latn", "mt": "mlt_Latn",
+}
+
+
 @dataclass
 class FertilityTable:
     """Per-language and per-script tokenizer-fertility lookup.
@@ -79,6 +106,11 @@ class FertilityTable:
     ``per_language`` maps a language code (FLORES-200 style ``eng_Latn``)
     to ``{"script": "Latn", "tpw": float, "tpc": float}``.
     ``per_script`` maps an ISO 15924 script code to a mean ``tpw`` value.
+
+    Lookups accept either FLORES-200 codes (the canonical table format) or
+    ISO 639-1 codes (the format emitted by the multilingual dataset
+    sources). ISO-2 lookups are translated via ``_ISO2_TO_FLORES200``
+    before resolving against the table.
     """
 
     backbone: str
@@ -106,19 +138,29 @@ class FertilityTable:
     def scripts(self) -> list[str]:
         return sorted(self.per_script.keys())
 
+    @staticmethod
+    def _normalize(lang_code: str | None) -> str | None:
+        """Translate ISO-2 codes into FLORES-200 form; pass FLORES through."""
+        if not lang_code:
+            return None
+        if lang_code in _ISO2_TO_FLORES200:
+            return _ISO2_TO_FLORES200[lang_code]
+        return lang_code
+
     def lookup_tpw(self, lang_code: str | None) -> float:
         """Return tokens-per-word for ``lang_code``.
 
         Falls back to per-script mean when the exact language is missing,
         then to a uniform 1.0 when the table is empty.
         """
-        if not lang_code or not self.per_language:
+        normalized = self._normalize(lang_code)
+        if not normalized or not self.per_language:
             return 1.0
-        if lang_code in self.per_language:
-            return float(self.per_language[lang_code]["tpw"])
+        if normalized in self.per_language:
+            return float(self.per_language[normalized]["tpw"])
         # Try splitting FLORES-style "eng_Latn" → script "Latn"
-        if "_" in lang_code:
-            script = lang_code.split("_", 1)[1]
+        if "_" in normalized:
+            script = normalized.split("_", 1)[1]
             if script in self.per_script:
                 return float(self.per_script[script])
         return 1.0
@@ -129,12 +171,13 @@ class FertilityTable:
         Returns ``-1`` when no match is found, which the controller treats
         as a fully-zero one-hot.
         """
-        if not lang_code or not self.per_script:
+        normalized = self._normalize(lang_code)
+        if not normalized or not self.per_script:
             return -1
-        if lang_code in self.per_language:
-            script = self.per_language[lang_code].get("script", "")
-        elif "_" in lang_code:
-            script = lang_code.split("_", 1)[1]
+        if normalized in self.per_language:
+            script = self.per_language[normalized].get("script", "")
+        elif "_" in normalized:
+            script = normalized.split("_", 1)[1]
         else:
             return -1
         try:
@@ -336,12 +379,23 @@ class ScriptController(nn.Module):
 
         tokens_at_level = self.tokens_at_level.to(device)
         expected_tokens = (probs * tokens_at_level.unsqueeze(0)).sum(dim=-1)  # (B,)
-        rate_loss = (expected_tokens - float(self.cfg.target_tokens)).abs().mean()
+
+        # Per-sample target derived from tpw. High-fertility scripts get a
+        # larger token budget; low-fertility ones a smaller one. When the
+        # fertility table is empty (lang_feats[:, 0] all == 1.0), the scale
+        # is uniform and target collapses to the scalar cfg.target_tokens —
+        # preserving backward compatibility with the original formulation.
+        # Bounds (16, 196) match the achievable token counts for levels 8 and 2.
+        tpw = lang_feats[:, 0].float()
+        scale = tpw / tpw.mean().clamp(min=1.0)
+        target = (float(self.cfg.target_tokens) * scale).clamp(min=16.0, max=196.0)
+        rate_loss = (expected_tokens - target).abs().mean()
 
         aux = {
             "compression_probs": probs.detach(),
             "expected_tokens": expected_tokens.detach(),
             "rate_loss": rate_loss,
+            "target_tokens": target.detach(),
         }
 
         if self.cfg.use_gumbel:

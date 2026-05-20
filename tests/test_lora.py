@@ -149,14 +149,26 @@ class TestGetLoraOptimizerGroups:
     def lora_config(self):
         return LoraAdapterConfig()
 
-    def test_returns_three_groups(self, model, lora_config):
+    def test_returns_four_groups(self, model, lora_config):
         groups = get_lora_optimizer_groups(model, base_lr=1e-4, lora_config=lora_config)
-        assert len(groups) == 3
+        assert len(groups) == 4
 
     def test_group_names(self, model, lora_config):
         groups = get_lora_optimizer_groups(model, base_lr=1e-4, lora_config=lora_config)
         names = {g["name"] for g in groups}
-        assert names == {"lora_A", "lora_B", "other"}
+        assert names == {"lora_A", "lora_B", "controller", "other"}
+
+    def test_controller_group_empty_without_controller(self, model, lora_config):
+        groups = get_lora_optimizer_groups(model, base_lr=1e-4, lora_config=lora_config)
+        ctrl = next(g for g in groups if g["name"] == "controller")
+        assert ctrl["params"] == []
+
+    def test_controller_lr_multiplier_applied(self, model, lora_config):
+        groups = get_lora_optimizer_groups(
+            model, base_lr=1e-4, lora_config=lora_config, controller_lr_multiplier=0.1,
+        )
+        ctrl = next(g for g in groups if g["name"] == "controller")
+        assert ctrl["lr"] == pytest.approx(1e-4 * 0.1)
 
     def test_frozen_params_excluded(self, model, lora_config):
         groups = get_lora_optimizer_groups(model, base_lr=1e-4, lora_config=lora_config)

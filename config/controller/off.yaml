@@ -8,3 +8,4 @@ gumbel_tau: 1.0
 fertility_table_path: ""
 compression_levels: [2, 4, 8]
 fairness_eval_steps: 500
+controller_lr_multiplier: 0.1
