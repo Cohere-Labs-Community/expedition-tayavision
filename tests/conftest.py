@@ -32,10 +32,30 @@ def device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# Composed so the tests are both auto-skipped without CUDA *and* deselectable
-# by name: `pytest -m "not requires_gpu"`. A bare skipif carries no marker, so
-# the old version could not be deselected -- you paid full collection cost
-# either way. `requires_gpu` is registered in pyproject.toml.
-requires_gpu = pytest.mark.requires_gpu(
-    pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+_skip_without_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA not available"
 )
+
+
+def requires_gpu(obj):
+    """Label a test GPU-only *and* skip it when there is no CUDA device.
+
+    Both properties are wanted: the label makes `pytest -m "not requires_gpu"`
+    able to deselect these before collection cost is paid, and the skip keeps a
+    CPU-only machine green. `requires_gpu` is registered in pyproject.toml.
+
+    This has to be a function. The obvious spelling,
+
+        requires_gpu = pytest.mark.requires_gpu(pytest.mark.skipif(...))
+
+    does NOT compose the two marks. Calling a MarkDecorator with a non-callable
+    argument stores that argument as a *parameter of the mark*, so the result is
+    a bare `requires_gpu` mark carrying the skipif in `mark.args`, and the skip
+    never happens. The tests then run everywhere and error in the fixture on the
+    first `.cuda()`.
+
+    That is invisible on a CUDA box -- which is why it shipped and only CI, on a
+    CPU-only runner, caught it: `RuntimeError: Found no NVIDIA driver`, six
+    errors in test_vision_encoder.py.
+    """
+    return pytest.mark.requires_gpu(_skip_without_cuda(obj))
