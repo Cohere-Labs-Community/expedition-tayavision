@@ -3,9 +3,9 @@
 **Written 2026-07-26, the last day of the TRC grant.** Everything below was measured on
 real hardware, not estimated. Where something is unverified it says so.
 
-The headline: **Phase 1 alignment completed a full epoch on a Cloud TPU v6e-16 and the
-trained projector is safe in GCS.** The `src/backend/` seam now lets the same
-`pipeline/train_alignment.py` run on either CUDA/DDP or torch_xla/SPMD.
+The headline: **Phase 1 alignment completed a full epoch on a Cloud TPU v6e-16.** The
+`src/backend/` seam now lets the same `pipeline/train_alignment.py` run on either CUDA/DDP
+or torch_xla/SPMD.
 
 ---
 
@@ -16,14 +16,17 @@ trained projector is safe in GCS.** The `src/backend/` seam now lets the same
 | **Result** | Full 1-epoch alignment, 2,180 optimizer steps, loss **9.053 → 2.367** |
 | **Hardware** | v6e-16 (4 hosts x 4 chips), `europe-west4-a`, spot |
 | **Wall clock** | **59 min 08 s** |
-| **Trained weights** | `gs://tayavision-eu/checkpoints/v6e16-align-01/e93fe1cd-684c-4c0f-925b-ad9eeb38ddf1/checkpoint_4360.pt` |
-| **Local copy** | `outputs/tpu-align-v6e16-2026-07-25/checkpoint_4360.pt` (67 MB, gitignored) |
+| **Trained weights** | `outputs/tpu-align-v6e16-2026-07-25/checkpoint_4360.pt` — **local only, and gitignored.** See section 9. |
 | **W&B** | https://wandb.ai/cataluna84/tayavision-tpu/runs/e93fe1cd684c4c0f925bad9eeb38ddf1 |
 | **Effective batch** | **256 — deliberately identical to the Modal GPU baseline** |
-| **Biggest caveat** | **None of the code is committed.** See section 5. |
+| **Code** | Branch `tpu`, PR #76, CI green |
+| **GCP** | **Fully decommissioned** — slice and `gs://tayavision-eu` both deleted |
 
 The checkpoint is **backend-portable**: all tensors are CPU-resident bf16, so it loads on
 CUDA with no conversion. Verified by loading it (section 1).
+
+> **The weights exist in exactly one place: `outputs/` on one machine.** That directory is
+> gitignored, so it is not on GitHub and not in any bucket. Back it up.
 
 ---
 
@@ -32,16 +35,19 @@ CUDA with no conversion. Verified by loading it (section 1).
 ### The trained projector
 
 ```
-gs://tayavision-eu/checkpoints/v6e16-align-01/e93fe1cd-684c-4c0f-925b-ad9eeb38ddf1/
+outputs/tpu-align-v6e16-2026-07-25/         <- gitignored, LOCAL ONLY
     checkpoint_1000.pt   checkpoint_2000.pt   checkpoint_3000.pt
     checkpoint_4000.pt   checkpoint_4360.pt   <- final, end of epoch
     config.json
 ```
 
 Filenames count **micro-steps**; 4360 micro-steps = 2,180 optimizer steps at
-`grad_acc_steps=2`. The bucket lives in GCP project `ml-pipelines-315702` and is **not**
-part of the TRC grant, so it outlives the grant — but it is also billable storage, so
-confirm it still exists before relying on it.
+`grad_acc_steps=2`.
+
+These were mirrored to `gs://tayavision-eu` during the run, pulled down at wrap-up, and
+**MD5-verified against their GCS objects before that bucket was deleted** — so they are
+confirmed faithful copies, not assumed ones. Hashes are in section 9. There is no cloud
+copy any more.
 
 Verified contents of `checkpoint_4360.pt`:
 
@@ -179,7 +185,12 @@ with LR 2e-5 (50x too low) against the wrong dataset.
 
 ### Provision (see section 8 first — size matters)
 
+`gs://tayavision-eu` was deleted at wrap-up, so recreate it before anything else.
+`setup_gcp.sh` is idempotent and creates the bucket if absent:
+
 ```bash
+bash scripts/tpu/setup_gcp.sh
+
 TRC_PROFILE=v6e-16-ew4a \
 SAVE_CKPT_DIR=gs://tayavision-eu/checkpoints/<new-prefix> \
 bash scripts/tpu/launch_spot.sh
@@ -232,25 +243,49 @@ for `[shard] process_index=` to find rank 0 before assuming a host is idle.
 
 ---
 
-## 5. The code is NOT committed
+## 5. Where the code is
 
-**This is the biggest risk in this handoff.** `HEAD` is still `25c9b79` and everything from
-this work lives in the working tree:
+**Branch `tpu`, PR #76, CI green.** 90 files, +8,845 / -181.
 
-- **19 modified tracked files**, +724 / -181 lines
-- **8 untracked paths**, including whole directories:
-  `src/backend/`, `scripts/tpu/`, `scripts/ci/`, `docs/tpu/`, `.claude/`,
-  `.github/workflows/tests.yml`, `tests/test_checkpoint_gcs.py`, `CLAUDE.md`, `.env.example`
+https://github.com/Cohere-Labs-Community/expedition-tayavision/pull/76
 
-Nothing was committed or pushed because `CLAUDE.md` says not to without being asked, and
-upstream is the shared `Cohere-Labs-Community` repo. **Commit this to a branch before the
-working tree is lost.** Suggested:
+Ten commits, ordered so each stands alone and the branch bisects:
 
-```bash
-git checkout -b tpu/backend-seam
-git add -A
-git commit -m "Add src/backend seam and TPU run control"
+| Commit | |
+|---|---|
+| `74b9422` | ruff/pytest config, 76 → 0 lint findings, CI workflow |
+| `d681c9c` | `CLAUDE.md` + the `.claude/` memory system |
+| `1694ba6` | **`src/backend/` seam** + `check_backend_seam.sh` |
+| `11daf17` | TPU run control (`scripts/tpu/`, `docs/tpu/`) |
+| `5581944` | durable `gs://` checkpointing + 31 tests |
+| `a0ee236` | **trainer conversion + the six silent XLA bugs** |
+| `5f9e1e1` | W&B project routing fix |
+| `fd9eff6` | this document |
+| `860831a` | decommission plan |
+| `268f210` | `requires_gpu` fix — the CI failure described below |
+
+The `.claude/` memory files (`PLAN.md`, `PROGRESS.md`, `memories.md`) are **gitignored as
+per-contributor state**, so they are not on the branch. That is deliberate — `PROGRESS.md`
+is an append-only machine log that would conflict on every merge — but it does mean this
+document is the durable record, not those.
+
+### The CI failure worth knowing about
+
+The workflow added in `74b9422` failed on its first run and caught a bug in that same
+commit. `requires_gpu` was written as
+
+```python
+requires_gpu = pytest.mark.requires_gpu(pytest.mark.skipif(...))   # WRONG
 ```
+
+which does **not** compose two marks — calling a `MarkDecorator` with a non-callable
+argument stores it as a *parameter of the mark*, so the skipif is never applied. Six GPU
+tests then ran on the CPU-only runner and errored with `Found no NVIDIA driver`.
+
+**The broken version is invisible on any machine with a GPU**, because the skip is never
+needed there. Only a CPU-only runner distinguishes them. Fixed in `268f210` with a function
+decorator; verified by reproducing the runner with `CUDA_VISIBLE_DEVICES=""`, which turns
+the exact CI command from `135 passed, 6 errors` into `135 passed, 6 skipped`.
 
 `.env` is gitignored and must stay that way. It is shipped to the VM inside the code
 tarball on purpose, because `CohereLabs/tiny-aya-*` are gated and there is no git clone in
@@ -382,7 +417,7 @@ exist`. `startup_script.sh` asserts the ABI immediately after install.
 
 | Gap | Detail |
 |---|---|
-| **Nothing is committed** | Section 5. Highest priority. |
+| **Weights exist in one place only** | `outputs/` is gitignored and the bucket is deleted, so the trained projector lives on a single machine with no backup. Highest priority. Section 9. |
 | Only Phase 1 ran on TPU | `train_instruct.py` and `train_multilingual.py` are **not** converted to the seam. They are still DDP+CUDA and will not run on TPU. |
 | No eval of the TPU checkpoint | The projector trained and the loss fell, but no CVQA/benchmark number was produced from it. |
 | ~~`train_multilingual.py` wandb project~~ | **Fixed.** It hardcoded `project="tayavision-multilingual"`, so a TPU bring-up run would have written into a GPU *results* project. Now `os.environ.get("WANDB_PROJECT") or "tayavision-multilingual"`; `cfg` is not in scope in `main()`, so the env var is the override channel — which is what `scripts/tpu/train_launcher.sh` already sets from `.env`. The literal stays as fallback, so Modal is byte-for-byte unchanged. |
@@ -431,82 +466,68 @@ NaN that would look like a hardware bug.
 
 ---
 
-## 9. Decommission plan
+## 9. Decommission — DONE
 
-The TPU slice is **already deleted** (2026-07-26): zero queued resources, zero nodes in
-`europe-west4-a`. TPU billing has stopped. What remains is `gs://tayavision-eu`, ~963 MiB.
+**Fully torn down 2026-07-26. Nothing of this project remains in GCP.**
 
-### Step 1 — delete `code/` and rotate the tokens (do this first)
+| Resource | State |
+|---|---|
+| v6e-16 slice + queued resource | **deleted** — `europe-west4-a` verified clean, 0 QRs, 0 nodes |
+| `gs://tayavision-eu` | **deleted**, bucket and all 963 MiB of contents |
+| Trained weights | **preserved locally**, all five checkpoints, each MD5-verified against the remote before deletion |
 
-```bash
-gcloud storage rm -r gs://tayavision-eu/code
-```
+### Where the weights are now
 
-**45 tarballs, 566 MiB, and every one contains a live `.env`.** Verified, not assumed:
+`outputs/tpu-align-v6e16-2026-07-25/` — 331 MB, **gitignored, so this directory is the only
+copy that exists anywhere.** Back it up if it matters to you.
 
-```
+| File | MD5 (base64) |
+|---|---|
+| `checkpoint_1000.pt` | `mtB7CLQSRYeJlYqGwUCurQ==` |
+| `checkpoint_2000.pt` | `l+/JVOTVksEkCBB3Ikm5vQ==` |
+| `checkpoint_3000.pt` | `U6YFJxb22teEwhvTuzhBng==` |
+| `checkpoint_4000.pt` | `EqvkeKHW/o1AJSWhLKI+vw==` |
+| **`checkpoint_4360.pt`** | `Uw0Cd5zogH3iBH8Ew9gcMw==` — **the final, end-of-epoch projector** |
+| `config.json` | — |
+
+Each was byte-compared to its GCS object before the bucket was removed, so these are
+faithful copies rather than assumed ones.
+
+### Rotate the tokens
+
+`gs://tayavision-eu/code/` held 45 deploy tarballs, each containing a live `.env`. Verified
+at the time, not assumed:
+
+```console
 $ gcloud storage cat gs://tayavision-eu/code/latest.tar.gz | tar tzf - | grep '\.env$'
 ./.env
 ```
 
-That was deliberate and correct while the slice existed — `CohereLabs/tiny-aya-*` are gated,
-there is no git clone in the TPU flow, so the tarball was the only channel credentials had
-(see `.env.example` and `scripts/tpu/_lib.sh:make_code_tarball`). With the slice gone it is
-only exposure: 45 copies of a live `HF_TOKEN` and `WANDB_API_KEY` at rest.
+They are gone now, but **deleting objects does not undo a read that may already have
+happened**. Rotate `HF_TOKEN` and `WANDB_API_KEY`.
 
-The bucket reports **no explicit `publicAccessPrevention` and no uniform bucket-level
-access** — that does not mean it is public, but it does mean nothing is enforcing that it
-stays private.
+If the tarball-ships-`.env` mechanism is used again, give it a lifecycle rule or fetch
+secrets at boot instead of leaving snapshots at rest.
 
-**Rotate `HF_TOKEN` and `WANDB_API_KEY` regardless of whether you delete the bucket.**
-Deleting the objects does not un-exfiltrate anything that may already have been read, and
-rotation is cheap.
+### Before the next TPU run
 
-The code itself is not lost: it is on the `tpu` branch. The tarballs are snapshots of it.
-
-### Step 2 — decide about `checkpoints/` (396.5 MiB)
+The bucket no longer exists, and `scripts/tpu/_lib.sh:20` still defaults `BUCKET` to
+`gs://tayavision-eu`. Recreate it first — `setup_gcp.sh` is idempotent and creates it if
+absent:
 
 ```bash
-# Inspect before removing anything
-gcloud storage ls -r 'gs://tayavision-eu/checkpoints/**'
+bash scripts/tpu/setup_gcp.sh          # recreates gs://tayavision-eu in europe-west4
+TRC_PROFILE=v6e-16-ew4a bash scripts/tpu/launch_spot.sh
 ```
 
-`v6e16-align-01/e93fe1cd-.../checkpoint_4360.pt` is **the trained projector** — the single
-scientific output of this work. A local copy exists at
-`outputs/tpu-align-v6e16-2026-07-25/checkpoint_4360.pt` (67 MB, gitignored, verified
-loadable), so deleting the bucket copy is survivable but leaves exactly one copy on one
-laptop.
+Everything else in section 4 then applies unchanged.
 
-Recommended: **keep** `v6e16-align-01/`, or move it somewhere long-lived (a HF repo, or
-`gs://` in a project you are keeping) before deleting. The seven sibling run-id directories
-under that prefix hold only `config.json` from failed attempts and can go:
+### Not ours — left alone
 
-```bash
-# Keeps the one directory that matters, removes the debris
-gcloud storage ls gs://tayavision-eu/checkpoints/v6e16-align-01/ \
-  | grep -v e93fe1cd-684c-4c0f-925b-ad9eeb38ddf1 \
-  | xargs -r -I{} gcloud storage rm -r {}
-```
-
-### Step 3 — the bucket itself
-
-Only once steps 1 and 2 are settled:
-
-```bash
-gcloud storage rm -r gs://tayavision-eu     # contents
-gcloud storage buckets delete gs://tayavision-eu
-```
-
-The bucket is in project `ml-pipelines-315702` and is **not** part of the TRC grant, so it
-does not disappear on its own — it will keep costing storage until deleted. At ~963 MiB
-that is cents per month, so there is no urgency on cost grounds; the urgency is entirely
-step 1.
-
-### What is already done
-
-- TPU slice and queued resource deleted; zone verified clean.
-- Trained weights copied locally and verified loadable.
-- All code committed to branch `tpu` and pushed; PR #76 open.
+`gs://tinyaya-stage2-eu` (**391 GiB**, `europe-west4`) belongs to the sibling project
+`tinyaya-stage2-scale`, which shares this GCP project and the same TRC grant. It was **not**
+touched. At europe-west4 Standard pricing that is roughly **$8/month**, so it is worth
+confirming it is still wanted — but that is a decision for that project, not this one.
 
 ## 10. Full provenance
 
