@@ -47,7 +47,7 @@ import wandb
 from config.lora_config import LoraAdapterConfig
 from config.model_config import TinyAyaVisionConfig
 from config.multilingual_config import MultilingualInstructConfig
-from models.tiny_aya_vision import TinyAyaVisionForConditionalGeneration
+from models.tiny_aya_vision import TinyAyaVisionForConditionalGeneration  # noqa: F401  (importing the `models` package registers the HF Auto classes)
 from pipeline.data import collate_fn
 from pipeline.multilingual_data import MultilingualInstructDataset
 from pipeline.apply_lora import apply_lora, get_lora_optimizer_groups
@@ -114,7 +114,7 @@ def main(
         print(f"{'DDP' if use_ddp else 'Single-GPU'}: world_size={world_size}, "
               f"global_batch_size={training_config.batch_size}, "
               f"per_gpu_batch_size={per_gpu_batch_size}")
-        print(f"\nMultilingual mixing config:")
+        print("\nMultilingual mixing config:")
         print(f"  Total samples: {training_config.total_samples}")
         print(f"  English ratio: {training_config.english_ratio}")
         print(f"  Temperature: {training_config.temperature}")
@@ -143,8 +143,15 @@ def main(
             }, f, indent=2)
 
     if is_main:
+        # Was hardcoded to "tayavision-multilingual", which silently ignored any
+        # override. On TPU that routed bring-up metrics into a GPU *results*
+        # project. `cfg` is not in scope here (it lives in run(), not main()), so
+        # the env var is the override channel -- which is also what
+        # scripts/tpu/train_launcher.sh sets from .env. The literal stays as the
+        # fallback, so existing Modal invocations are byte-for-byte unchanged.
         wandb.init(
-            project="tayavision-multilingual",
+            project=os.environ.get("WANDB_PROJECT") or "tayavision-multilingual",
+            entity=os.environ.get("WANDB_ENTITY"),
             name=run_id,
             id=run_id.replace("-", ""),
             resume="allow",
