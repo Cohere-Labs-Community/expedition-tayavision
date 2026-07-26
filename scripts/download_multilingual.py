@@ -33,7 +33,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from pathlib import Path
 from threading import Lock
 
-from huggingface_hub import hf_hub_download, HfApi
+from huggingface_hub import HfApi
 
 
 PANGEA_REPO = "neulab/PangeaInstruct"
@@ -88,7 +88,7 @@ def _retry_request(request_fn, max_retries=_MAX_RETRIES):
                  f"(attempt {attempt + 1}/{max_retries}) ...")
             time.sleep(wait)
         except (requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout) as exc:
+                requests.exceptions.Timeout):
             if attempt == max_retries:
                 raise
             wait = _BACKOFF_BASE * (2 ** attempt)

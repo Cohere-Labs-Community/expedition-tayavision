@@ -380,7 +380,6 @@ def _stream_merge_one_alpha(
     output_dir.mkdir(parents=True, exist_ok=True)
     _copy_hf_metadata_files(finetuned_dir, output_dir)
 
-    orig_embed = "model.embed_tokens.weight"
     ft_embed = f"{LLM_PREFIX}model.embed_tokens.weight"
     ft_lm_head = f"{LLM_PREFIX}lm_head.weight"
     has_ft_embed = ft_embed in finetuned_map

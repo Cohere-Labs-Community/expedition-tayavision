@@ -49,6 +49,30 @@ dev = [
     "ruff>=0.8.0",
 ]
 
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Ruff's default set, pinned explicitly so a ruff upgrade cannot silently
+# change what CI gates on. Widening this (W, I, UP, B, SIM add ~120 findings
+# between them) is a deliberate follow-up, not a drive-by.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# These two set TORCHINDUCTOR_CACHE_DIR and extend sys.path before importing
+# torch and the local packages. The ordering is load-bearing: the env var has
+# to be set before inductor initialises, so the imports genuinely cannot move
+# to the top of the file.
+"pipeline/train_instruct.py" = ["E402"]
+"pipeline/train_multilingual.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "requires_gpu: test needs a CUDA device (auto-skipped when unavailable)",
+]
+
 [[tool.uv.index]]
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"

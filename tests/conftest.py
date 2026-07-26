@@ -32,6 +32,10 @@ def device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-requires_gpu = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA not available"
+# Composed so the tests are both auto-skipped without CUDA *and* deselectable
+# by name: `pytest -m "not requires_gpu"`. A bare skipif carries no marker, so
+# the old version could not be deselected -- you paid full collection cost
+# either way. `requires_gpu` is registered in pyproject.toml.
+requires_gpu = pytest.mark.requires_gpu(
+    pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 )
