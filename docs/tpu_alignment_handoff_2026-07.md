@@ -431,7 +431,84 @@ NaN that would look like a hardware bug.
 
 ---
 
-## 9. Full provenance
+## 9. Decommission plan
+
+The TPU slice is **already deleted** (2026-07-26): zero queued resources, zero nodes in
+`europe-west4-a`. TPU billing has stopped. What remains is `gs://tayavision-eu`, ~963 MiB.
+
+### Step 1 — delete `code/` and rotate the tokens (do this first)
+
+```bash
+gcloud storage rm -r gs://tayavision-eu/code
+```
+
+**45 tarballs, 566 MiB, and every one contains a live `.env`.** Verified, not assumed:
+
+```
+$ gcloud storage cat gs://tayavision-eu/code/latest.tar.gz | tar tzf - | grep '\.env$'
+./.env
+```
+
+That was deliberate and correct while the slice existed — `CohereLabs/tiny-aya-*` are gated,
+there is no git clone in the TPU flow, so the tarball was the only channel credentials had
+(see `.env.example` and `scripts/tpu/_lib.sh:make_code_tarball`). With the slice gone it is
+only exposure: 45 copies of a live `HF_TOKEN` and `WANDB_API_KEY` at rest.
+
+The bucket reports **no explicit `publicAccessPrevention` and no uniform bucket-level
+access** — that does not mean it is public, but it does mean nothing is enforcing that it
+stays private.
+
+**Rotate `HF_TOKEN` and `WANDB_API_KEY` regardless of whether you delete the bucket.**
+Deleting the objects does not un-exfiltrate anything that may already have been read, and
+rotation is cheap.
+
+The code itself is not lost: it is on the `tpu` branch. The tarballs are snapshots of it.
+
+### Step 2 — decide about `checkpoints/` (396.5 MiB)
+
+```bash
+# Inspect before removing anything
+gcloud storage ls -r 'gs://tayavision-eu/checkpoints/**'
+```
+
+`v6e16-align-01/e93fe1cd-.../checkpoint_4360.pt` is **the trained projector** — the single
+scientific output of this work. A local copy exists at
+`outputs/tpu-align-v6e16-2026-07-25/checkpoint_4360.pt` (67 MB, gitignored, verified
+loadable), so deleting the bucket copy is survivable but leaves exactly one copy on one
+laptop.
+
+Recommended: **keep** `v6e16-align-01/`, or move it somewhere long-lived (a HF repo, or
+`gs://` in a project you are keeping) before deleting. The seven sibling run-id directories
+under that prefix hold only `config.json` from failed attempts and can go:
+
+```bash
+# Keeps the one directory that matters, removes the debris
+gcloud storage ls gs://tayavision-eu/checkpoints/v6e16-align-01/ \
+  | grep -v e93fe1cd-684c-4c0f-925b-ad9eeb38ddf1 \
+  | xargs -r -I{} gcloud storage rm -r {}
+```
+
+### Step 3 — the bucket itself
+
+Only once steps 1 and 2 are settled:
+
+```bash
+gcloud storage rm -r gs://tayavision-eu     # contents
+gcloud storage buckets delete gs://tayavision-eu
+```
+
+The bucket is in project `ml-pipelines-315702` and is **not** part of the TRC grant, so it
+does not disappear on its own — it will keep costing storage until deleted. At ~963 MiB
+that is cents per month, so there is no urgency on cost grounds; the urgency is entirely
+step 1.
+
+### What is already done
+
+- TPU slice and queued resource deleted; zone verified clean.
+- Trained weights copied locally and verified loadable.
+- All code committed to branch `tpu` and pushed; PR #76 open.
+
+## 10. Full provenance
 
 | | |
 |---|---|
