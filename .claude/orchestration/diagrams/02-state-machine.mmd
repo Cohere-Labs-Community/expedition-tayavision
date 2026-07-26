@@ -1,0 +1,39 @@
+---
+title: Run loop — DEPLOY / WATCH / CLASSIFY / RECOVER
+---
+stateDiagram-v2
+  [*] --> READY: preflight passes (gcloud auth, .env incl. HF_TOKEN, entrypoint exists)
+
+  READY --> DEPLOY
+
+  DEPLOY: tar working tree incl. .env -> GCS
+  DEPLOY: pull on --worker=all, uv sync + torch_xla[tpu]
+  DEPLOY: relaunch tmux 'train', bake TAYAVISION_RUN_TAG
+  DEPLOY --> WATCH
+
+  WATCH: poll worker 0 log, scoped AFTER this RUN_TAG
+  WATCH: status markers via tail (NEVER head)
+  WATCH: repeating step line fetched separately
+  WATCH: compile-cause counter distinguishes compiling from hung
+
+  WATCH --> WATCH: step lines advancing, compile count flat (T0)
+  WATCH --> WATCH: XLA compile up to 20 min cold (T1)
+  WATCH --> DONE: clean exit
+  WATCH --> CLASSIFY: dirty exit or timeout
+  WATCH --> T3: node preempted / unreachable
+
+  CLASSIFY: match agents/tpu-diagnoser.md, first hit wins
+  CLASSIFY --> DEPLOY: T2 known fix, not a repeat (costs ~14 min recompile)
+  CLASSIFY --> STOP: T4 unknown, or same class twice
+
+  T3: qr_watch sees SUSPENDED/FAILED
+  T3 --> STOP: SAVE_CKPT_DIR is not gs:// -> notify-only
+  T3 --> STOP: budget spent (20) or quota abort
+  T3 --> BOOT: within budget AND checkpoints durable
+
+  BOOT: fetch tarball, resume=auto, same W&B run
+  BOOT --> WATCH
+
+  STOP: STOP + ntfy push
+  STOP --> [*]
+  DONE --> [*]

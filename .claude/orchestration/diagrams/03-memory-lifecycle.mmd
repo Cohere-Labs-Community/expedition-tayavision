@@ -1,0 +1,51 @@
+---
+title: Memory lifecycle — ephemeral runtime data to durable knowledge
+---
+flowchart LR
+  subgraph EPH["Ephemeral (lost on reboot / cleanup)"]
+    TL["/tmp/train.log per worker"]
+    QL["/tmp/qr_watch_tayavision.log"]
+    DL["/tmp/deploy.log"]
+  end
+
+  subgraph AUTO["Automatic capture (hooks)"]
+    PTU["PostToolUse — logs every edit/exec"]
+    STP["Stop — runs VERIFY.md checks"]
+    PRC["PreCompact — snapshots open PLAN items"]
+  end
+
+  subgraph REPO["Durable, in the repo"]
+    PG["PROGRESS.md — append-only log (gitignored)"]
+    PLN["PLAN.md — goal + checklist (gitignored)"]
+    MEM["memories.md — decisions + gotchas (gitignored)"]
+    VER["VERIFY.md — done-criteria (tracked)"]
+    ORCH["orchestration/ — spec, playbook, baselines (tracked)"]
+  end
+
+  subgraph EXT["External, permanent"]
+    WB["W&B tayavision-tpu"]
+    GCS["gs://tayavision-eu checkpoints"]
+  end
+
+  NEXT["next Claude session starts informed"]
+
+  TL --> WB
+  TL --> GCS
+  TL -->|run outcome| PG
+  QL -->|preemption history| PG
+  DL -->|deploy history| PG
+  PTU --> PG
+  STP --> VER
+  PRC --> PG
+  PG -->|pattern seen 2+ times, /remember| MEM
+  PG -->|goal changed, /plan| PLN
+  MEM -->|operational rule| ORCH
+  WB -->|promoted numbers| ORCH
+  MEM -->|SessionStart injection| NEXT
+  PLN --> NEXT
+  ORCH -->|CONTROL_PLANE + TPU_OPTIMIZATION_SPEC injected| NEXT
+
+  classDef eph fill:#f8d7da,stroke:#721c24
+  classDef dur fill:#d4edda,stroke:#155724
+  class TL,QL,DL eph
+  class PG,PLN,MEM,VER,ORCH dur

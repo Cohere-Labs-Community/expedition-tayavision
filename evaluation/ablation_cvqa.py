@@ -125,7 +125,7 @@ def print_table(models: list[ModelScores], min_samples: int) -> list[dict]:
     overall = {}
     for model in models:
         total = sum(model.counts.values())
-        overall[model.label] = sum(model.accuracies[l] * model.counts[l] for l in model.accuracies) / total
+        overall[model.label] = sum(model.accuracies[lang] * model.counts[lang] for lang in model.accuracies) / total
     score_cells = "".join(f"  {overall[model.label] * 100:>17.1f}%" for model in models)
     baseline_score = overall[baseline]
     delta_cells = "".join(

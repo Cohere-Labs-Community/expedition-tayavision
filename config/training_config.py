@@ -12,6 +12,13 @@ class AlignmentConfig:
     num_epochs: int = 1
     batch_size: int = 8
     grad_acc_steps: int = 32
+    # None = run the full num_epochs (Modal behaviour, unchanged). An int caps
+    # optimizer steps, which is what makes a bounded TPU smoke stoppable without
+    # killing the tmux session.
+    max_steps: int | None = None
+    # None = pad each batch to its own longest item (CUDA). An int pins the
+    # sequence length, which XLA requires to avoid recompiling per batch shape.
+    fixed_seq_len: int | None = None
     warmup_ratio: float = 0.03
     learning_rate: float = 1e-3
     weight_decay: float = 0.0

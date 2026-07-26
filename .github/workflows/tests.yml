@@ -1,0 +1,56 @@
+name: tests
+
+# Complements ci-cd.yml (the `/run scripts/modal_*.py` PR-comment dispatcher),
+# which does not run tests or lint.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        # CPU wheels: the default index in pyproject.toml is CUDA 12.4, which
+        # is a multi-GB download the runner has no GPU to use.
+        env:
+          UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+        run: uv sync --group dev
+
+      - name: Lint
+        run: uv run --no-sync ruff check .
+
+      - name: Backend seam
+        # torch_xla must stay confined to src/backend/tpu_backend.py. A leak
+        # elsewhere drags libtpu into the import graph and breaks this whole job
+        # at import time. Runs before the tests because it explains them failing.
+        run: bash scripts/ci/check_backend_seam.sh
+
+      - name: Test
+        # 17 tests in test_processing.py and test_vlm_assembly.py load the gated
+        # CohereLabs/tiny-aya-{base,global} repos. With an HF_TOKEN secret that
+        # has access they run; without one they are skipped rather than failing
+        # the build, so forks still get a green signal on the other 112.
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -n "$HF_TOKEN" ]; then
+            uv run --no-sync pytest tests/ -q
+          else
+            echo "::notice::No HF_TOKEN secret; skipping the 17 gated-repo tests."
+            uv run --no-sync pytest tests/ -q \
+              --ignore=tests/test_processing.py \
+              --ignore=tests/test_vlm_assembly.py
+          fi

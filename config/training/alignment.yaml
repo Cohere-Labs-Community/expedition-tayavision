@@ -5,6 +5,17 @@ max_seq_len: 2048
 num_epochs: 1
 batch_size: 8
 grad_acc_steps: 32
+
+# Declared here (not just on AlignmentConfig) because Hydra runs in struct mode:
+# a key absent from the YAML cannot be set with `training.x=...`, only with the
+# `+training.x=...` append form. Both default to null = current behaviour.
+#
+# max_steps      cap on optimizer steps; null runs the full num_epochs.
+# fixed_seq_len  pad every batch to this length. null = pad to the longest item
+#                in the batch (correct on CUDA). XLA needs a fixed shape or it
+#                recompiles per batch. 256 covers 196 image tokens + a caption.
+max_steps: null
+fixed_seq_len: null
 warmup_ratio: 0.03
 learning_rate: 1.0e-3
 weight_decay: 0.0

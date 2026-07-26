@@ -61,8 +61,6 @@ script. Use scripts/modal_download.py for LLaVA-Pretrain which includes COCO.
 
 from __future__ import annotations
 
-import csv
-import json
 import os
 import shutil
 import subprocess
@@ -70,7 +68,6 @@ import tarfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Lock
-from typing import Literal
 
 import modal
 
@@ -220,7 +217,7 @@ def _retry_request(request_fn, max_retries: int = _MAX_RETRIES):
             wait = _BACKOFF_BASE * (2 ** attempt)
             _log(f"    HTTP {status}, retrying in {wait}s (attempt {attempt + 1}/{max_retries})...")
             time.sleep(wait)
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             if attempt == max_retries:
                 raise
             wait = _BACKOFF_BASE * (2 ** attempt)
@@ -365,7 +362,9 @@ def download_json_dataset(
 
         # Use hf_hub_download for authentication support (gated datasets)
         try:
-            downloaded_path = hf_hub_download(
+            # Called for its side effect (writes into local_dir); the returned
+            # cache path is not used.
+            hf_hub_download(
                 config["hf_repo"],
                 filename,
                 repo_type="dataset",
@@ -417,7 +416,7 @@ def download_hf_dataset(
     except Exception as e:
         _log(f"[{config['name']}] Failed: {e}")
         if config.get("gated"):
-            _log(f"  This is a gated dataset. Provide --hf-secret with your HF token.")
+            _log("  This is a gated dataset. Provide --hf-secret with your HF token.")
         return False
 
 
@@ -452,7 +451,9 @@ def download_mvl_sib(output_base: Path, hf_token: str | None = None) -> bool:
         for idx in range(10):
             img_name = f"{cat}_{idx}.jpg"
             try:
-                img_path = hf_hub_download(
+                # Called for its side effect (writes into images_dir); the
+                # returned cache path is not used.
+                hf_hub_download(
                     config["hf_repo"],
                     f"data/images/sib200/{img_name}",
                     repo_type="dataset",

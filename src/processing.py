@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 from PIL import Image
-from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer, ProcessorMixin
+from transformers import AutoImageProcessor, AutoTokenizer, ProcessorMixin
 from transformers.feature_extraction_utils import BatchFeature
 
 from config.model_config import TinyAyaVisionConfig

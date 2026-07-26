@@ -16,7 +16,7 @@ import transformers
 from lm_eval.api.registry import register_model
 from lm_eval.models.hf_vlms import HFMultimodalLM
 
-import models  # registers TinyAyaVision with HF Auto classes
+import models  # noqa: F401  (imported for its side effect: registers TinyAyaVision with HF Auto classes)
 from config.model_config import TinyAyaVisionConfig
 from src.processing import TinyAyaVisionProcessor
 from evaluation.tasks.maxm.utils import vqa_score

@@ -1,0 +1,18 @@
+# Per-contributor state. The tooling (settings.json, hooks/, agents/,
+# commands/, skills/) is tracked; the memory files are not — PROGRESS.md is an
+# append-only machine log that would conflict on every merge, and PLAN.md /
+# memories.md are personal working state.
+PROGRESS.md
+PLAN.md
+memories.md
+# Archived PROGRESS is per-contributor too, but ship the directory itself so
+# `archive-progress` has somewhere to write on a fresh clone.
+archive/*
+!archive/.gitkeep
+
+__pycache__/
+*.pyc
+
+# Rendered diagrams. The .mmd sources are the checked-in artifact.
+orchestration/diagrams/svg/
+orchestration/diagrams/png/

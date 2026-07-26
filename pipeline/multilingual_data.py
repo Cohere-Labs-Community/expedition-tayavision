@@ -17,7 +17,6 @@ Dataset schemas (verified from HF / GitHub):
 """
 
 import json
-import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -77,7 +76,7 @@ def compute_temperature_weights(
     T→∞: uniform across all languages
     """
     langs = list(lang_counts.keys())
-    counts = np.array([lang_counts[l] for l in langs], dtype=np.float64)
+    counts = np.array([lang_counts[lang] for lang in langs], dtype=np.float64)
 
     # Avoid division by zero for empty languages
     counts = np.maximum(counts, 1.0)
@@ -108,10 +107,11 @@ def compute_sampling_indices(
     data. This enables more uniform distribution across languages.
     When False, each language is capped at its available count.
     """
-    rng = np.random.RandomState(seed)
-
+    # No RNG here: this function only computes per-language target counts and is
+    # fully deterministic. `seed` is accepted for signature stability and is
+    # unused -- the actual sampling (with replacement) happens downstream.
     en_count = lang_counts.get("en", 0)
-    non_en_counts = {l: c for l, c in lang_counts.items() if l != "en"}
+    non_en_counts = {lang: c for lang, c in lang_counts.items() if lang != "en"}
 
     # Allocate English budget
     en_budget = int(total_samples * english_ratio)
@@ -122,16 +122,16 @@ def compute_sampling_indices(
     if non_en_counts:
         non_en_weights = compute_temperature_weights(non_en_counts, temperature)
         target_per_lang = {
-            l: int(non_en_budget * w) for l, w in non_en_weights.items()
+            lang: int(non_en_budget * w) for lang, w in non_en_weights.items()
         }
-        for l in target_per_lang:
+        for lang in target_per_lang:
             if allow_upsampling:
                 # Allow upsampling up to max_upsample_factor × available data
-                cap = int(non_en_counts[l] * max_upsample_factor)
-                target_per_lang[l] = min(target_per_lang[l], cap)
+                cap = int(non_en_counts[lang] * max_upsample_factor)
+                target_per_lang[lang] = min(target_per_lang[lang], cap)
             else:
                 # Hard cap at available data
-                target_per_lang[l] = min(target_per_lang[l], non_en_counts[l])
+                target_per_lang[lang] = min(target_per_lang[lang], non_en_counts[lang])
     else:
         target_per_lang = {}
 
@@ -252,7 +252,7 @@ class PangeaInsSource(DatasetSource):
 
         # Fast path: load from cached Parquet
         if parquet_path.exists():
-            print(f"    Loading PangeaIns from cached Parquet...")
+            print("    Loading PangeaIns from cached Parquet...")
             ds = HFDataset.from_parquet(str(parquet_path))
             if max_samples and len(ds) > max_samples:
                 ds = ds.shuffle(seed=42).select(range(max_samples))
@@ -266,7 +266,7 @@ class PangeaInsSource(DatasetSource):
                 records = orjson.loads(f.read())
             print(f"    Parsed {len(records):,} records with orjson")
         except ImportError:
-            print(f"    orjson not available, falling back to stdlib json (slower)...")
+            print("    orjson not available, falling back to stdlib json (slower)...")
             with open(json_path, "r") as f:
                 records = json.load(f)
             print(f"    Parsed {len(records):,} records with json")
@@ -276,7 +276,7 @@ class PangeaInsSource(DatasetSource):
             if "conversations" in r and isinstance(r["conversations"], list):
                 r["conversations"] = json.dumps(r["conversations"])
 
-        print(f"    Converting to Arrow dataset...")
+        print("    Converting to Arrow dataset...")
         df = pd.DataFrame(records)
         del records  # free ~12 GB
         # Coerce mixed-type columns to strings to avoid ArrowTypeError
@@ -326,7 +326,7 @@ class PaloSource(DatasetSource):
         parquet_path = Path(local_dir) / "palo_multilingual_dataset.parquet"
 
         if not json_path.exists() and not parquet_path.exists():
-            print(f"    Downloading palo_multilingual_dataset.json (~13GB)...")
+            print("    Downloading palo_multilingual_dataset.json (~13GB)...")
             hf_hub_download(
                 repo_id=self.hf_dataset_id,
                 filename="palo_multilingual_dataset.json",
@@ -337,7 +337,7 @@ class PaloSource(DatasetSource):
 
         # Fast path: load from cached Parquet
         if parquet_path.exists():
-            print(f"    Loading PALO from cached Parquet...")
+            print("    Loading PALO from cached Parquet...")
             ds = HFDataset.from_parquet(str(parquet_path))
             if max_samples and len(ds) > max_samples:
                 ds = ds.shuffle(seed=42).select(range(max_samples))
@@ -351,7 +351,7 @@ class PaloSource(DatasetSource):
                 records = orjson.loads(f.read())
             print(f"    Parsed {len(records):,} records with orjson")
         except ImportError:
-            print(f"    orjson not available, falling back to stdlib json (slower)...")
+            print("    orjson not available, falling back to stdlib json (slower)...")
             with open(json_path, "r") as f:
                 records = json.load(f)
             print(f"    Parsed {len(records):,} records with json")
@@ -360,7 +360,7 @@ class PaloSource(DatasetSource):
             if "conversations" in r and isinstance(r["conversations"], list):
                 r["conversations"] = json.dumps(r["conversations"])
 
-        print(f"    Converting to Arrow dataset...")
+        print("    Converting to Arrow dataset...")
         df = pd.DataFrame(records)
         del records
         for col in df.columns:
@@ -407,7 +407,7 @@ class LLaVAInstructSource(DatasetSource):
         parquet_path = Path(local_dir) / "llava_instruct_150k.parquet"
 
         if not json_path.exists() and not parquet_path.exists():
-            print(f"    Downloading llava_instruct_150k.json...")
+            print("    Downloading llava_instruct_150k.json...")
             hf_hub_download(
                 repo_id=self.hf_dataset_id,
                 filename="llava_instruct_150k.json",
@@ -418,14 +418,14 @@ class LLaVAInstructSource(DatasetSource):
 
         # Fast path: load from cached Parquet
         if parquet_path.exists():
-            print(f"    Loading LLaVA-Instruct from cached Parquet...")
+            print("    Loading LLaVA-Instruct from cached Parquet...")
             ds = HFDataset.from_parquet(str(parquet_path))
             if max_samples and len(ds) > max_samples:
                 ds = ds.shuffle(seed=42).select(range(max_samples))
             return ds
 
         # First load: parse JSON → Arrow → Parquet cache
-        print(f"    Parsing llava_instruct_150k.json...")
+        print("    Parsing llava_instruct_150k.json...")
         try:
             import orjson
             with open(json_path, "rb") as f:
@@ -440,7 +440,7 @@ class LLaVAInstructSource(DatasetSource):
             if "conversations" in r and isinstance(r["conversations"], list):
                 r["conversations"] = json.dumps(r["conversations"])
 
-        print(f"    Converting to Arrow dataset...")
+        print("    Converting to Arrow dataset...")
         df = pd.DataFrame(records)
         del records
         for col in df.columns:
@@ -451,7 +451,7 @@ class LLaVAInstructSource(DatasetSource):
 
         print(f"    Caching as Parquet at {parquet_path}...")
         ds.to_parquet(str(parquet_path))
-        print(f"    Parquet cache saved")
+        print("    Parquet cache saved")
 
         if max_samples and len(ds) > max_samples:
             ds = ds.shuffle(seed=42).select(range(max_samples))
@@ -989,7 +989,7 @@ class BloomCaptioningSource(DatasetSource):
                               cache_dir=cache_dir, trust_remote_code=True)
         except Exception as e:
             print(f"    bloom-captioning: could not load (gated?): {e}")
-            print(f"    Falling back to empty dataset")
+            print("    Falling back to empty dataset")
             return HFDataset.from_list([])
 
         if max_samples and len(ds) > max_samples:
@@ -1144,7 +1144,7 @@ class MultilingualInstructDataset(torch.utils.data.Dataset):
                 self._lang_examples[lang].append((src, example))
 
         # Report language distribution before mixing
-        lang_counts = {l: len(exs) for l, exs in self._lang_examples.items()}
+        lang_counts = {lg: len(exs) for lg, exs in self._lang_examples.items()}
         total_available = sum(lang_counts.values())
         print(f"\nAvailable data: {total_available} examples across {len(lang_counts)} languages")
         for lang in sorted(lang_counts, key=lang_counts.get, reverse=True)[:20]:

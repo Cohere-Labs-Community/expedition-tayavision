@@ -43,7 +43,7 @@ from tqdm import tqdm
 from config.lora_config import LoraAdapterConfig
 from config.model_config import TinyAyaVisionConfig
 from config.training_config import InstructConfig
-from models.tiny_aya_vision import TinyAyaVisionForConditionalGeneration
+from models.tiny_aya_vision import TinyAyaVisionForConditionalGeneration  # noqa: F401  (importing the `models` package registers the HF Auto classes)
 from pipeline.data import InstructDataset, collate_fn
 from pipeline.apply_lora import apply_lora, get_lora_optimizer_groups
 from pipeline.utils import (

@@ -1,4 +1,3 @@
-import json
 import os
 import torch
 
@@ -283,17 +282,68 @@ class InstructDataset(torch.utils.data.Dataset):
 def collate_fn(
     batch,
     pad_token_id: int,
+    fixed_seq_len: int | None = None,
+    image_token_id: int | None = None,
 ):
-    input_ids = torch.nn.utils.rnn.pad_sequence(
-        [item["input_ids"] for item in batch],
-        batch_first=True,
-        padding_value=pad_token_id,
-    )
-    attention_mask = torch.nn.utils.rnn.pad_sequence(
-        [item["attention_mask"] for item in batch],
-        batch_first=True,
-        padding_value=0,
-    )
+    """Collate a batch, optionally to a FIXED sequence length.
+
+    `fixed_seq_len=None` (the default) pads to the longest item in the batch --
+    unchanged behaviour, and what the CUDA/Modal path uses.
+
+    Set it on XLA. `pad_sequence` produces a different sequence length for
+    almost every batch, and on XLA **every distinct shape is a new HLO compile**,
+    so compilation never converges and `xla/compile_cause_count` climbs forever.
+    Padding to one length makes the graph shape-stable. It also pins activation
+    memory, which is linear in sequence length.
+
+    Sequences longer than `fixed_seq_len` ARE TRUNCATED, so the value must cover
+    the real distribution. Measured on LLaVA-Pretrain with the tiny-aya-global
+    tokenizer (400 random samples, 2026-07-25):
+
+        seq len          min 571   p50 585   p99 599   max 601
+        image span ends            max 569
+
+    The instruction-tuned tokenizer HAS a chat template, whose system preamble
+    pushes the 196 image tokens out to positions ~372-569 -- nowhere near the
+    start. A value of 256 (which looks generous next to "196 image tokens plus a
+    short caption") silently truncates away **every image token**, and the model
+    then trains on text alone while reporting a perfectly plausible loss.
+    640 keeps 100% of image tokens and 100% of the text.
+
+    Pass `image_token_id` to make that failure impossible: truncation that drops
+    image tokens then raises instead of training on nothing.
+    """
+
+    def _pad(seqs, value):
+        out = torch.nn.utils.rnn.pad_sequence(
+            seqs, batch_first=True, padding_value=value
+        )
+        if fixed_seq_len is None:
+            return out
+        cur = out.size(1)
+        if cur > fixed_seq_len:
+            return out[:, :fixed_seq_len]
+        if cur < fixed_seq_len:
+            pad = out.new_full((out.size(0), fixed_seq_len - cur), value)
+            return torch.cat([out, pad], dim=1)
+        return out
+
+    raw_ids = [item["input_ids"] for item in batch]
+    input_ids = _pad(raw_ids, pad_token_id)
+    attention_mask = _pad([item["attention_mask"] for item in batch], 0)
+
+    if fixed_seq_len is not None and image_token_id is not None:
+        before = sum(int((s == image_token_id).sum()) for s in raw_ids)
+        after = int((input_ids == image_token_id).sum())
+        if before and after < before:
+            longest = max(len(s) for s in raw_ids)
+            raise ValueError(
+                f"fixed_seq_len={fixed_seq_len} truncated away image tokens: "
+                f"{before} present before, {after} after (longest sequence in this "
+                f"batch is {longest}). The model would train on text alone and "
+                f"still report a plausible loss. Raise fixed_seq_len above the "
+                f"position where the image span ends."
+            )
     # Collate pixel_values only for items that have images (skip text-only).
     image_items = [item for item in batch if item["pixel_values"] is not None]
     if image_items:
@@ -304,11 +354,7 @@ def collate_fn(
     else:
         pixel_values = None
 
-    labels = torch.nn.utils.rnn.pad_sequence(
-        [item["labels"] for item in batch],
-        batch_first=True,
-        padding_value=-100,
-    )
+    labels = _pad([item["labels"] for item in batch], -100)
 
     result = {
         "input_ids": input_ids,

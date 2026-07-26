@@ -98,7 +98,7 @@ def main():
     logger.info(f"Model: {args.model_name}")
     if args.model_subfolder:
         logger.info(f"Model subfolder: {args.model_subfolder}")
-    logger.info(f"=========================================")
+    logger.info("=========================================")
 
     # Register TinyAyaVision with HuggingFace Auto classes so lm-eval can
     # load it via AutoModelForCausalLM.from_pretrained / AutoConfig.
@@ -218,7 +218,6 @@ def main():
                     if isinstance(v, (int, float)) and k != "doc_id":
                         sample_metrics.setdefault(k, []).append(v)
 
-            n_so_far = n_done + (chunk_idx + 1 - n_done // args.chunk_size) * args.chunk_size
             running_metrics = {k: sum(vs) / len(vs) for k, vs in sample_metrics.items()}
             elapsed = time.monotonic() - eval_start_time
             logger.info(
