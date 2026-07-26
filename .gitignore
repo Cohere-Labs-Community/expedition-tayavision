@@ -11,6 +11,11 @@ __pycache__/
 *.json
 *.jsonl
 
+# Claude Code hook wiring. The blanket *.json rule above would hide it, leaving
+# anyone who clones with a .claude/ that has no hooks registered. Per-contributor
+# state (PROGRESS.md, PLAN.md, memories.md) is excluded by .claude/.gitignore.
+!.claude/settings.json
+
 # C extensions
 *.so
 

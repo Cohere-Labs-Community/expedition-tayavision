@@ -1,0 +1,49 @@
+---
+title: Tiny Aya Vision TPU orchestration — layers and what each survives
+---
+flowchart TD
+  subgraph L1["Claude session (disposable)"]
+    CS["reads logs, decides, edits code<br/>NEVER owns a long loop"]
+  end
+
+  subgraph L2["Workstation tmux (survives Claude)"]
+    QW["qrwatch-tayavision<br/>scripts/tpu/qr_watch.sh<br/>/tmp/qr_watch_tayavision.log"]
+  end
+
+  subgraph L3["QR metadata (survives node reboot)"]
+    MD["code-tarball-uri<br/>TAYAVISION_ENTRYPOINT<br/>TAYAVISION_HYDRA_OVERRIDES<br/>resume=auto, W&B run identity"]
+  end
+
+  subgraph L4["VM tmux 'train' (survives workstation)"]
+    W0["worker 0<br/>/tmp/train.log"]
+    WN["workers 1..N-1<br/>(N=1 on v6e-8)"]
+  end
+
+  subgraph L5["External (survives everything)"]
+    GCS["gs://tayavision-eu<br/>checkpoints + code tarball"]
+    WB["W&B tayavision-tpu"]
+    NT["ntfy.sh push events"]
+  end
+
+  subgraph L6["Modal / GPU — the authoritative path, unaffected by any of this"]
+    MOD["scripts/modal_*.py<br/>every published result"]
+  end
+
+  CS -.reads.-> QW
+  CS -.reads.-> W0
+  CS -->|modal run| MOD
+  QW -->|recycle on preemption| MD
+  MD -->|boot self-heal| W0
+  W0 -->|deploy_tarball.sh --worker=all| WN
+  W0 <-->|PJRT rendezvous, multi-host only| WN
+  W0 --> GCS
+  W0 --> WB
+  QW --> NT
+  W0 --> NT
+
+  classDef ephemeral fill:#fff3cd,stroke:#856404
+  classDef durable fill:#d4edda,stroke:#155724
+  classDef authoritative fill:#cce5ff,stroke:#004085
+  class CS ephemeral
+  class GCS,WB,NT durable
+  class MOD authoritative
